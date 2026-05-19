@@ -16,6 +16,12 @@ prompt. PII is screened by Presidio on every ingestion path. Temporal orchestrat
 workflows including daily decay crons and HITL PII review. All data within a workspace is
 strictly isolated; cross-workspace sharing requires explicit grants.
 
+**Terminology Note**: "Layer 4" and "org knowledge" refer to the same concept in the memory
+model. "Layer 4" refers to the memory layer in the four-layer recall architecture (Layer 1 =
+session, L2 = agent, L3 = shared, L4 = org knowledge); "org knowledge" refers to the Qdrant
+collection that stores BYOD-indexed content. Both terms are interchangeable throughout this
+plan and tasks.
+
 **Stack**: Python 3.11 (agent-workers, context-hydrator, knowledge-ingestion, llm-gateway)
 · Go 1.22 (connector-registry) · Temporal 1.24.2 · Qdrant v1.9.2 · Mem0 ≥0.1.0 ·
 Redis 7.2-alpine · PostgreSQL 16-alpine + pgvector · Presidio ≥2.2.355 · Ollama (GPU) ·
