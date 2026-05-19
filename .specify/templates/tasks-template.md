@@ -10,6 +10,10 @@ description: "Task list template for feature implementation"
 
 **Tests**: The examples below include test tasks. Tests are OPTIONAL - only include them if explicitly requested in the feature specification.
 
+When tests or validation tasks are included, prefer Compose-launched commands over host
+commands. Container build, health check, and GPU-validation work belongs in the early
+foundation phases.
+
 **Organization**: Tasks are grouped by user story to enable independent implementation and testing of each story.
 
 ## Format: `[ID] [P?] [Story] Description`
@@ -49,8 +53,8 @@ description: "Task list template for feature implementation"
 **Purpose**: Project initialization and basic structure
 
 - [ ] T001 Create project structure per implementation plan
-- [ ] T002 Initialize [language] project with [framework] dependencies
-- [ ] T003 [P] Configure linting and formatting tools
+- [ ] T002 Define Docker Compose services, named volumes, and health checks
+- [ ] T003 [P] Configure containerized linting and formatting commands
 
 ---
 
@@ -62,12 +66,12 @@ description: "Task list template for feature implementation"
 
 Examples of foundational tasks (adjust based on your project):
 
-- [ ] T004 Setup database schema and migrations framework
-- [ ] T005 [P] Implement authentication/authorization framework
+- [ ] T004 Build and pin container images for core services
+- [ ] T005 [P] Add GPU reservations for inference services in docker-compose.yml
 - [ ] T006 [P] Setup API routing and middleware structure
 - [ ] T007 Create base models/entities that all stories depend on
-- [ ] T008 Configure error handling and logging infrastructure
-- [ ] T009 Setup environment configuration management
+- [ ] T008 Configure error handling and structured logging infrastructure
+- [ ] T009 Setup environment configuration management and .env.example
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 

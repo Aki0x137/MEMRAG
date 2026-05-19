@@ -5,6 +5,9 @@
 **Status**: Draft  
 **Input**: User description: "$ARGUMENTS"
 
+All user stories MUST include a container-native validation path and must name the Compose
+services or container commands used to prove the story works.
+
 ## User Scenarios & Testing *(mandatory)*
 
 <!--

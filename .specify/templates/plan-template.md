@@ -31,7 +31,11 @@
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-[Gates determined based on constitution file]
+- Confirm every runtime component runs inside Docker Compose with no host execution path.
+- Confirm Compose services use pinned images, health checks, and `depends_on: condition: service_healthy`.
+- Confirm any inference service that needs GPU access reserves NVIDIA devices in Compose.
+- Confirm tests, linting, and type checks have container commands.
+- Confirm configuration uses env vars and named volumes instead of hardcoded paths or secrets.
 
 ## Project Structure
 
