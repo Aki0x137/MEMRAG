@@ -1,0 +1,84 @@
+version: '3.8'
+
+# Test Compose file inherits base Compose and overrides for testing
+# Override with: docker compose -f docker-compose.yml -f docker-compose.test.yml up
+
+services:
+  # Override existing services for test environment
+  agent-workers:
+    environment:
+      ENVIRONMENT: test
+      GITHUB_API_BASE_URL: http://github-api-mock:8085
+      CONFLUENCE_BASE_URL: http://confluence-api-mock:8084
+      SLACK_API_BASE_URL: http://slack-api-mock:8086
+
+  context-hydrator:
+    environment:
+      ENVIRONMENT: test
+
+  knowledge-ingestion:
+    environment:
+      ENVIRONMENT: test
+      GITHUB_API_BASE_URL: http://github-api-mock:8085
+      CONFLUENCE_BASE_URL: http://confluence-api-mock:8084
+      SLACK_API_BASE_URL: http://slack-api-mock:8086
+
+  connector-registry:
+    environment:
+      ENVIRONMENT: test
+
+  # Test-only Mock Services
+  github-api-mock:
+    build:
+      context: ./tests/mocks/github-api-mock
+      dockerfile: Dockerfile
+    container_name: memrag-github-api-mock
+    environment:
+      ENVIRONMENT: test
+    ports:
+      - "8085:8085"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8085/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - memrag-network
+
+  confluence-api-mock:
+    build:
+      context: ./tests/mocks/confluence-api-mock
+      dockerfile: Dockerfile
+    container_name: memrag-confluence-api-mock
+    environment:
+      ENVIRONMENT: test
+    ports:
+      - "8084:8084"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8084/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - memrag-network
+
+  # Test runner service (runs tests and exits)
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: memrag-test-runner
+    environment:
+      ENVIRONMENT: test
+      GITHUB_API_BASE_URL: http://github-api-mock:8085
+      CONFLUENCE_BASE_URL: http://confluence-api-mock:8084
+    depends_on:
+      - agent-workers
+      - context-hydrator
+      - knowledge-ingestion
+      - connector-registry
+      - github-api-mock
+      - confluence-api-mock
+    command: pytest tests/ -v --tb=short
+    networks:
+      - memrag-network

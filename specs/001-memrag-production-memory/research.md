@@ -165,6 +165,9 @@ value or the archival mechanism.
   `s3://memrag-archive/memory-tombstones/` as an Apache Iceberg table, partitioned by
   `workspace_id` and `tombstone_date`.
 - Iceberg write uses PyIceberg + boto3; local dev uses MinIO as S3-compatible backend.
+- AWS SDK ownership is explicit: Python runtime uses `boto3`/`botocore` for S3/AppConfig/
+  Secrets Manager interactions close to ingestion and archive code; Go runtime uses
+  `aws-sdk-go-v2` in `connector-registry` for admin/control-plane config and secret lookup.
 - The `DecayMemoriesWorkflow` manages this in two phases: (1) write to Iceberg, (2) delete
   from Qdrant. Iceberg write failure aborts the workflow without Qdrant deletion.
 
@@ -222,6 +225,8 @@ value or the archival mechanism.
 | Semantic chunking | chonkie | `>=0.3.0` | MIT |
 | HTML extraction | trafilatura | `>=1.8.0` | Apache 2.0 |
 | Iceberg archival | pyiceberg + boto3 | `>=0.7.0` | Apache 2.0 |
+| Python AWS integrations | boto3 + botocore | `>=1.34.0` | Apache 2.0 |
+| Go AWS integrations | aws-sdk-go-v2 (`config`, `secretsmanager`, `appconfigdata`) | latest compatible | Apache 2.0 |
 | Local S3 (dev) | MinIO | `minio/minio:RELEASE.2024-05-01T01-11-10Z` | AGPL-3.0 (server) |
 | Connector registry | Go 1.22 | custom service | — |
 | Agent workers | Python 3.11 | custom service | — |

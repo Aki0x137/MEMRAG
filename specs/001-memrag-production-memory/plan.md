@@ -25,7 +25,8 @@ plan and tasks.
 **Stack**: Python 3.11 (agent-workers, context-hydrator, knowledge-ingestion, llm-gateway)
 · Go 1.22 (connector-registry) · Temporal 1.24.2 · Qdrant v1.9.2 · Mem0 ≥0.1.0 ·
 Redis 7.2-alpine · PostgreSQL 16-alpine + pgvector · Presidio ≥2.2.355 · Ollama (GPU) ·
-PyIceberg ≥0.7.0 / MinIO · Prometheus v2.52.0
+PyIceberg ≥0.7.0 / MinIO · boto3/botocore (AWS integrations) · aws-sdk-go-v2
+(`config`, `secretsmanager`, `appconfigdata`) · Prometheus v2.52.0
 
 ---
 
@@ -33,14 +34,15 @@ PyIceberg ≥0.7.0 / MinIO · Prometheus v2.52.0
 
 **Language/Version**: Python 3.11 (application), Go 1.22 (connector-registry)  
 **Primary Dependencies**: Temporal 1.24.2, Qdrant v1.9.2, Mem0 ≥0.1.0, Redis 7.2-alpine,
-PostgreSQL 16-alpine + pgvector, Presidio ≥2.2.355, PyIceberg ≥0.7.0, Prometheus v2.52.0,
+PostgreSQL 16-alpine + pgvector, Presidio ≥2.2.355, PyIceberg ≥0.7.0, boto3/botocore,
+aws-sdk-go-v2 (`config`, `secretsmanager`, `appconfigdata`), Prometheus v2.52.0,
 qwen3-embedding:4b (Ollama), gemma4:12b (Ollama)  
-**Storage**: Qdrant (vector), PostgreSQL (relational), Redis (session cache), S3/MinIO (Iceberg tombstone archive)  
+**Storage**: Qdrant (vector), PostgreSQL (relational), Redis (session cache), AWS S3/MinIO (Iceberg tombstone archive), AWS Secrets Manager (production connector secrets), AWS AppConfig (optional weight/PII config source)  
 **Testing**: pytest (Python unit + integration), `docker compose -f docker-compose.test.yml up --exit-code-from app` (full stack)  
 **Target Platform**: Linux server (Docker Compose, NVIDIA GPU required for Ollama)  
 **Project Type**: Platform / multi-service backend  
 **Performance Goals**: p95 context assembly ≤ 500 ms; p95 recall per layer ≤ 200 ms  
-**Constraints**: Token budget enforcement in context-hydrator; Qdrant eventual consistency via content-hash idempotency; Redis 24h session TTL; grants cache 60s passive TTL  
+**Constraints**: Token budget enforcement in context-hydrator; Qdrant eventual consistency via content-hash idempotency; Redis 24h session TTL; grants cache 60s passive TTL; AWS integrations must work against live AWS endpoints in production and MinIO/local mocks in development without code forks  
 **Scale/Scope**: Multi-workspace, per-workspace agent isolation; BYOD connectors per workspace
 
 ---
@@ -157,7 +159,7 @@ implementation.
 | `agent-workers` | `python:3.11-slim` (built) | — | Temporal worker (memory recall/store activities) |
 | `context-hydrator` | `python:3.11-slim` (built) | 8081 | assemble() RPC; exposes `/metrics` |
 | `knowledge-ingestion` | `python:3.11-slim` (built) | — | Temporal worker (IngestionWorkflow, DecayMemoriesWorkflow) |
-| `connector-registry` | `golang:1.22-alpine` (built) | 8082 | Connector CRUD REST API + HITL signal relay |
+| `connector-registry` | `golang:1.22-alpine` (built) | 8082 | Connector CRUD REST API + HITL signal relay + AWS AppConfig/Secrets Manager clients |
 | `github-api-mock` *(test only)* | `python:3.11-slim` (built) | 8085 | GitHub REST API mock (`tests/mocks/`) |
 | `confluence-api-mock` *(test only)* | `python:3.11-slim` (built) | 8084 | Confluence OAuth 3-LO + CQL mock (`tests/mocks/`) |
 | `ollama` | `ollama/ollama:latest`* | 11434 | GPU-resident LLM + embedding inference |
@@ -218,6 +220,7 @@ END
 | Decision | Why Needed | Simpler Alternative Rejected Because |
 |---|---|---|
 | Separate `connector-registry` in Go | FR-032 requires a stable REST API with fast CRUD and Temporal signal relay; Go is idiomatic for this pattern in the existing `packages/go-shared` | Python FastAPI could work but would duplicate the Go Temporal client already in the shared package |
+| AWS SDK split by runtime | Python services own S3/Iceberg archive writes and RDS schema reads naturally via boto3/botocore + DB drivers; Go service owns AppConfig/Secrets Manager access for admin/config flows via aws-sdk-go-v2 | Forcing all AWS interactions through a single runtime would introduce cross-service coupling and unnecessary proxy APIs |
 | Mem0 for store/extract only; custom Qdrant hybrid recall | Mem0's built-in recall doesn't support hybrid BM25+dense with RRF; A-005 resolution | Using Mem0 recall would forfeit dense+sparse fusion and the domain weight matrix |
 | 3 Qdrant collections (not 1) | Access control scoping differs: agent-scoped vs workspace-scoped vs cross-workspace; separate collections allow payload index isolation without cross-tenant leakage | A single collection with a filter field would require careful payload index sizing and increases risk of misconfigured multi-tenant filter bugs |
 | PyIceberg + MinIO for tombstone archive | Compliance requirement for audit trail before deletion from Qdrant | Writing tombstones to PostgreSQL would conflict with the append-only constraint and grow unboundedly |

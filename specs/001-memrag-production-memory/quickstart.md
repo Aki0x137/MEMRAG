@@ -41,6 +41,26 @@ MINIO_ROOT_PASSWORD=changeme
 GITHUB_TOKEN=
 # Confluence connector (uses local mock by default in dev)
 CONFLUENCE_BASE_URL=http://confluence-api-mock:8084
+# AWS defaults for local MinIO/dev secret mocks
+AWS_REGION=us-east-1
+AWS_S3_ENDPOINT_URL=http://minio:9000
+AWS_SECRETS_MANAGER_PREFIX=/memrag/dev
+```
+
+For production-backed AWS integrations, also set the deployment-specific values below before
+bringing up ingestion or connector-management flows:
+
+```dotenv
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+AWS_SESSION_TOKEN=
+AWS_APP_CONFIG_APPLICATION_ID=
+AWS_APP_CONFIG_ENVIRONMENT_ID=
+AWS_APP_CONFIG_PROFILE_ID=
+AWS_SECRETS_MANAGER_PREFIX=
+AWS_RDS_IAM_ENABLED=false
+AWS_RDS_REGION=us-east-1
+AWS_S3_BUCKET=memrag-archive
 ```
 
 ---

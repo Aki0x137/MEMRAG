@@ -387,6 +387,11 @@ and within the configured token budget.
 - **FR-010**: The platform MUST ship connectors for: GitHub repositories (code files, READMEs,
   wikis), Confluence spaces (pages), Slack channels (messages at least 7 days old from
   configured channels), and AWS RDS databases (schema metadata only — no row data).
+  AWS-backed integration paths use the native runtime SDK for the owning service: Python
+  services use `boto3`/`botocore` for S3, AppConfig, Secrets Manager, and optional RDS IAM
+  auth token generation; Go services use `aws-sdk-go-v2` for AppConfig and Secrets Manager.
+  Local development remains compatible with MinIO and local secret mocks via endpoint override
+  configuration.
 
 - **FR-011**: Ingestion MUST be background-only. Agents MUST never call external source APIs
   at workflow runtime; all org knowledge access MUST go through the pre-built vector index.
@@ -612,6 +617,11 @@ and within the configured token budget.
   Docker Compose. Production targets AWS but the Compose stack is the canonical entrypoint
   for all development and integration testing.
 
+- **A-001a**: AWS account-specific identifiers (account ID, IAM role ARNs, VPC/subnet IDs,
+  RDS endpoints, AppConfig application/environment/profile IDs, Secrets Manager prefixes,
+  S3 bucket names) are deployment inputs and MUST be supplied via environment variables or
+  secret references per environment, never hardcoded in source, specs, or Compose files.
+
 - **A-002**: All LLM inference (embedding generation, memory extraction LLM, agent reasoning
   LLM) runs through a local LLM gateway backed by Ollama-served models. No external cloud
   LLM APIs are required for local operation.
@@ -637,6 +647,11 @@ and within the configured token budget.
 - **A-007**: Connector credentials are stored by reference only (path to a secrets store
   entry, not the raw secret value) in the connector registry database. For local development,
   a local secrets mock is used; AWS Secrets Manager is the production secrets provider.
+
+- **A-007a**: When the source system is AWS-managed (for example RDS), connectors may also
+  resolve ephemeral auth material from AWS at runtime using the service SDK rather than
+  persisting static passwords. Secrets Manager references and IAM-auth generation inputs are
+  treated as connector configuration, not operator-entered secrets in the codebase.
 
 - **A-008**: Graphiti temporal knowledge graph (for relationship-aware cross-agent memory) is
   explicitly deferred to a future phase. This spec does not include Graphiti.
@@ -666,6 +681,10 @@ and within the configured token budget.
   archived to an S3 bucket in Apache Iceberg table format
   (`s3://memrag-archive/memory-tombstones/`) before deletion from the Qdrant collection,
   enabling cold-storage retrieval and compliance auditing.
+
+- **A-012a**: The same archival code path targets AWS S3 in production and MinIO in local
+  development/test via configuration only. The Python ingestion/archive runtime owns this
+  abstraction through `boto3`/`botocore` endpoint and credential configuration.
 
 - **A-013**: Sharing grant cache invalidation uses passive Redis TTL expiry (60s TTL on
   `grants:{workspace_id}`). No active cache purge is issued when a grant is created or

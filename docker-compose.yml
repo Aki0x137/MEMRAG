@@ -1,0 +1,324 @@
+version: '3.8'
+
+services:
+  # Infrastructure Services
+  postgres:
+    image: postgres:16-alpine
+    container_name: memrag-postgres
+    environment:
+      POSTGRES_DB: memrag
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - memrag-network
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: memrag-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - memrag-network
+
+  qdrant:
+    image: qdrant/qdrant:v1.9.2
+    container_name: memrag-qdrant
+    environment:
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-memrag-secret}
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - memrag-network
+
+  minio:
+    image: minio/minio:latest
+    container_name: memrag-minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - memrag-network
+
+  temporal:
+    image: temporalio/temporal:1.24.2
+    container_name: memrag-temporal
+    environment:
+      DB: postgresql
+      DB_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PWD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_HOST: postgres
+    ports:
+      - "7233:7233"
+      - "7234:7234"
+      - "7235:7235"
+      - "7236:7236"
+      - "7239:7239"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7233"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - memrag-network
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: memrag-ollama
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/version"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - memrag-network
+
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: memrag-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    depends_on:
+      - agent-workers
+      - context-hydrator
+      - knowledge-ingestion
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9090/-/healthy"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - memrag-network
+
+  # Application Services
+  connector-registry:
+    build:
+      context: ./services/connector-registry
+      dockerfile: Dockerfile
+    container_name: memrag-connector-registry
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/memrag
+      TEMPORAL_HOST: temporal:7233
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_APP_CONFIG_APPLICATION_ID: ${AWS_APP_CONFIG_APPLICATION_ID:-}
+      AWS_APP_CONFIG_ENVIRONMENT_ID: ${AWS_APP_CONFIG_ENVIRONMENT_ID:-}
+      AWS_APP_CONFIG_PROFILE_ID: ${AWS_APP_CONFIG_PROFILE_ID:-}
+      AWS_SECRETS_MANAGER_PREFIX: ${AWS_SECRETS_MANAGER_PREFIX:-/memrag/development}
+      AWS_SECRETS_MANAGER_ENDPOINT_URL: ${AWS_SECRETS_MANAGER_ENDPOINT_URL:-}
+    ports:
+      - "8082:8082"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - memrag-network
+
+  agent-workers:
+    build:
+      context: ./services/agent-workers
+      dockerfile: Dockerfile
+    container_name: memrag-agent-workers
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      WORKSPACE_ID: ${WORKSPACE_ID:-default-workspace}
+      TEMPORAL_HOST: temporal:7233
+      QDRANT_HOST: qdrant:6333
+      REDIS_URL: redis://redis:6379
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_DEVICE: ${OLLAMA_DEVICE:-cuda}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_APP_CONFIG_APPLICATION_ID: ${AWS_APP_CONFIG_APPLICATION_ID:-}
+      AWS_APP_CONFIG_ENVIRONMENT_ID: ${AWS_APP_CONFIG_ENVIRONMENT_ID:-}
+      AWS_APP_CONFIG_PROFILE_ID: ${AWS_APP_CONFIG_PROFILE_ID:-}
+    ports:
+      - "8080:8080"
+    depends_on:
+      temporal:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - memrag-network
+
+  context-hydrator:
+    build:
+      context: ./services/context-hydrator
+      dockerfile: Dockerfile
+    container_name: memrag-context-hydrator
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      WORKSPACE_ID: ${WORKSPACE_ID:-default-workspace}
+      REDIS_URL: redis://redis:6379
+      QDRANT_HOST: qdrant:6333
+      OLLAMA_HOST: http://ollama:11434
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_APP_CONFIG_APPLICATION_ID: ${AWS_APP_CONFIG_APPLICATION_ID:-}
+      AWS_APP_CONFIG_ENVIRONMENT_ID: ${AWS_APP_CONFIG_ENVIRONMENT_ID:-}
+      AWS_APP_CONFIG_PROFILE_ID: ${AWS_APP_CONFIG_PROFILE_ID:-}
+    ports:
+      - "8081:8081"
+    depends_on:
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - memrag-network
+
+  knowledge-ingestion:
+    build:
+      context: ./services/knowledge-ingestion
+      dockerfile: Dockerfile
+    container_name: memrag-knowledge-ingestion
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      WORKSPACE_ID: ${WORKSPACE_ID:-default-workspace}
+      TEMPORAL_HOST: temporal:7233
+      QDRANT_HOST: qdrant:6333
+      MINIO_URL: http://minio:9000
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: memrag
+      OLLAMA_HOST: http://ollama:11434
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      CONFLUENCE_BASE_URL: ${CONFLUENCE_BASE_URL:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET:-memrag-archive}
+      AWS_S3_ENDPOINT_URL: ${AWS_S3_ENDPOINT_URL:-http://minio:9000}
+      AWS_S3_FORCE_PATH_STYLE: ${AWS_S3_FORCE_PATH_STYLE:-true}
+      AWS_SECRETS_MANAGER_PREFIX: ${AWS_SECRETS_MANAGER_PREFIX:-/memrag/development}
+      AWS_SECRETS_MANAGER_ENDPOINT_URL: ${AWS_SECRETS_MANAGER_ENDPOINT_URL:-}
+      AWS_RDS_REGION: ${AWS_RDS_REGION:-us-east-1}
+      AWS_RDS_IAM_ENABLED: ${AWS_RDS_IAM_ENABLED:-false}
+      AWS_RDS_SSL_MODE: ${AWS_RDS_SSL_MODE:-require}
+    ports:
+      - "8083:8083"
+    depends_on:
+      temporal:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - memrag-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  qdrant_data:
+  minio_data:
+  ollama_data:
+  prometheus_data:
+
+networks:
+  memrag-network:
+    driver: bridge
