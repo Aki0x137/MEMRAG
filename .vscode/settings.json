@@ -6,6 +6,9 @@
         "speckit.tasks": true,
         "speckit.implement": true
     },
+    "evenBetterToml.schema.associations": {
+        "^file:///home/akshay-kumar/code/infra_projects/MEMRAG/(?:.*/)?pyproject\\.toml$": "https://json.schemastore.org/pyproject.json"
+    },
     "chat.tools.terminal.autoApprove": {
         ".specify/scripts/bash/": true,
         ".specify/scripts/powershell/": true

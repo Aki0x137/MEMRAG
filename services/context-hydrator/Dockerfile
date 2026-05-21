@@ -8,13 +8,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && curl -LsSf https://astral.sh/uv/install.sh | sh
 
-ENV PATH="/root/.cargo/bin:$PATH"
+ENV PATH="/root/.local/bin:$PATH"
 
 # Copy project files
 COPY . .
 
-# Install dependencies with uv
-RUN uv sync --frozen
+# Install dependencies with uv (from root workspace)
+RUN cd /app && uv sync
 
 # Expose API port
 EXPOSE 8081

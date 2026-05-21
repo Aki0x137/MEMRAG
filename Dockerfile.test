@@ -5,16 +5,19 @@ WORKDIR /app
 # Install system dependencies and uv
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
-    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /var/lib/apt/lists/ \
     && curl -LsSf https://astral.sh/uv/install.sh | sh
 
-ENV PATH="/root/.cargo/bin:$PATH"
+ENV PATH="/root/.local/bin:$PATH"
 
 # Copy project files
 COPY . .
 
-# Install dependencies with uv
-RUN uv sync --frozen
+# Install dependencies with uv from workspace root
+RUN uv sync --frozen --all-extras
 
-# Default to running pytest
-CMD ["uv", "run", "pytest", "tests/", "-v", "--tb=short"]
+# Install pytest and asyncio plugin
+RUN uv pip install pytest pytest-asyncio
+
+# Run tests from the workspace using uv run
+CMD ["uv", "run", "--package", "memrag-agent-workers", "pytest", "services/agent-workers/tests/", "-v", "--tb=short"]

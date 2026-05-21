@@ -11,4 +11,8 @@ members = [
     "packages/memrag-shared",
     "services/agent-workers",
     "services/knowledge-ingestion",
+    "services/context-hydrator",
 ]
+
+[tool.uv.sources]
+memrag-shared = { workspace = true }

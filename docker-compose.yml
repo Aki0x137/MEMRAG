@@ -46,10 +46,11 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333' 2>/dev/null"]
       interval: 5s
       timeout: 5s
       retries: 5
+      start_period: 10s
     networks:
       - memrag-network
 
@@ -74,14 +75,14 @@ services:
       - memrag-network
 
   temporal:
-    image: temporalio/temporal:1.24.2
+    image: temporalio/auto-setup:1.24.2
     container_name: memrag-temporal
     environment:
-      DB: postgresql
+      DB: postgres12
       DB_PORT: 5432
       POSTGRES_USER: postgres
       POSTGRES_PWD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_HOST: postgres
+      POSTGRES_SEEDS: postgres
     ports:
       - "7233:7233"
       - "7234:7234"
@@ -92,10 +93,11 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:7233"]
-      interval: 5s
+      test: ["CMD-SHELL", "temporal operator cluster health --address $(hostname -i):7233 2>/dev/null | grep -q SERVING"]
+      interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 15
+      start_period: 60s
     networks:
       - memrag-network
 
@@ -117,10 +119,11 @@ services:
               count: 1
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/version"]
-      interval: 5s
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/11434' 2>/dev/null"]
+      interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
     networks:
       - memrag-network
 
@@ -183,8 +186,8 @@ services:
 
   agent-workers:
     build:
-      context: ./services/agent-workers
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/agent-workers/Dockerfile
     container_name: memrag-agent-workers
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-development}
@@ -214,10 +217,11 @@ services:
       ollama:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
-      interval: 5s
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 3
+      start_period: 15s
     networks:
       - memrag-network
 
@@ -250,17 +254,18 @@ services:
       ollama:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/healthz"]
-      interval: 5s
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 3
+      start_period: 15s
     networks:
       - memrag-network
 
   knowledge-ingestion:
     build:
-      context: ./services/knowledge-ingestion
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/knowledge-ingestion/Dockerfile
     container_name: memrag-knowledge-ingestion
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-development}
@@ -304,10 +309,11 @@ services:
       ollama:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8083/healthz"]
-      interval: 5s
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 3
+      start_period: 15s
     networks:
       - memrag-network
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import os
 from typing import Any, Sequence
 
@@ -32,4 +33,5 @@ async def get_worker(
         task_queue=task_queue,
         workflows=list(workflows or []),
         activities=list(activities or []),
+        activity_executor=concurrent.futures.ThreadPoolExecutor(max_workers=10),
     )

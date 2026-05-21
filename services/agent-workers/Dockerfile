@@ -9,16 +9,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && curl -LsSf https://astral.sh/uv/install.sh | sh
 
-ENV PATH="/root/.cargo/bin:$PATH"
+ENV PATH="/root/.local/bin:$PATH"
+ENV PYTHONPATH="/app/services/agent-workers/src"
 
-# Copy project files
+# Copy entire workspace
 COPY . .
 
-# Install dependencies with uv
-RUN uv sync --frozen
+# Sync dependencies using uv workspace
+RUN uv sync --frozen --all-packages
 
 # Expose metrics port
 EXPOSE 8080
 
-# Run Temporal worker
-CMD ["uv", "run", "python", "-m", "services.agent_workers.worker"]
+# Run via uv
+CMD ["uv", "run", "--package", "memrag-agent-workers", "python", "-m", "worker"]
