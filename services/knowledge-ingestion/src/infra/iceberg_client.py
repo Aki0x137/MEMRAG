@@ -71,7 +71,7 @@ def _tombstone_schema() -> Schema:
 def _tombstone_spec() -> PartitionSpec:
     return PartitionSpec(
         PartitionField(source_id=1, field_id=1001, transform=IdentityTransform(), name="workspace_id"),
-        PartitionField(source_id=8, field_id=1002, transform=DayTransform(), name="tombstoned_day"),
+        PartitionField(source_id=8, field_id=1002, transform=DayTransform(root=False), name="tombstoned_day"),
     )
 
 
