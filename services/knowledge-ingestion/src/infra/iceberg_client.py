@@ -56,15 +56,15 @@ def load_tombstone_catalog():
 
 def _tombstone_schema() -> Schema:
     return Schema(
-        NestedField(1, "workspace_id", StringType(), required=True),
-        NestedField(2, "agent_id", StringType(), required=True),
-        NestedField(3, "memory_type", StringType(), required=True),
-        NestedField(4, "content", StringType(), required=True),
-        NestedField(5, "decay_score", FloatType(), required=True),
-        NestedField(6, "created_at", TimestamptzType(), required=True),
-        NestedField(7, "last_accessed_at", TimestamptzType(), required=True),
-        NestedField(8, "tombstoned_at", TimestamptzType(), required=True),
-        NestedField(9, "content_hash", StringType(), required=True),
+        NestedField(1, "workspace_id", StringType(root=False), required=True),
+        NestedField(2, "agent_id", StringType(root=False), required=True),
+        NestedField(3, "memory_type", StringType(root=False), required=True),
+        NestedField(4, "content", StringType(root=False), required=True),
+        NestedField(5, "decay_score", FloatType(root=False), required=True),
+        NestedField(6, "created_at", TimestamptzType(root=False), required=True),
+        NestedField(7, "last_accessed_at", TimestamptzType(root=False), required=True),
+        NestedField(8, "tombstoned_at", TimestamptzType(root=False), required=True),
+        NestedField(9, "content_hash", StringType(root=False), required=True),
     )
 
 
