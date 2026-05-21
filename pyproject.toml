@@ -1,7 +1,14 @@
 [project]
 name = "memrag"
 version = "0.1.0"
-description = "Add your description here"
+description = "MEMRAG — Production Memory, RAG & BYOD Knowledge Platform"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
+
+[tool.uv.workspace]
+members = [
+    "packages/memrag-shared",
+    "services/agent-workers",
+    "services/knowledge-ingestion",
+]
