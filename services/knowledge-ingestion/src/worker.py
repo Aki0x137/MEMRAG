@@ -8,9 +8,18 @@ import logging
 from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.service import RPCError
 
+from activities.ingestion import (
+    chunk_and_embed,
+    diff_resources,
+    fetch_resources,
+    pii_screen,
+    update_sync_state,
+    upsert_org_knowledge,
+)
 from infra.temporal_client import get_client, get_worker
 from workflows.decay_memories import decay_and_archive
 from workflows.decay_workflow import DecayMemoriesWorkflow
+from workflows.ingestion import IngestionWorkflow
 
 
 async def _ensure_decay_schedule() -> None:
@@ -32,8 +41,16 @@ async def main() -> None:
     await _ensure_decay_schedule()
     worker = await get_worker(
         task_queue="ingestion-workers",
-        workflows=[DecayMemoriesWorkflow],
-        activities=[decay_and_archive],
+        workflows=[DecayMemoriesWorkflow, IngestionWorkflow],
+        activities=[
+            decay_and_archive,
+            fetch_resources,
+            diff_resources,
+            chunk_and_embed,
+            pii_screen,
+            upsert_org_knowledge,
+            update_sync_state,
+        ],
     )
     await worker.run()
 

@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from activities.memory import recall_agent_memory_activity, store_agent_memory
+from activities.memory import recall_agent_memory_activity, recall_shared_memory_activity, store_agent_memory
 from activities.session import checkpoint_session, fetch_recent_session
 from infra.temporal_client import get_worker
+from tools.promote_finding import promote_finding_to_shared_knowledge
 from workflows.agent_workflow import AgentWorkflow
 
 
@@ -20,7 +21,9 @@ async def main() -> None:
             fetch_recent_session,
             checkpoint_session,
             recall_agent_memory_activity,
+            recall_shared_memory_activity,
             store_agent_memory,
+            promote_finding_to_shared_knowledge,
         ],
     )
     await worker.run()
