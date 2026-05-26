@@ -1,5 +1,3 @@
-version: '3.8'
-
 # Test Compose file inherits base Compose and overrides for testing
 # Override with: docker compose -f docker-compose.yml -f docker-compose.test.yml up
 
@@ -27,6 +25,25 @@ services:
     environment:
       ENVIRONMENT: test
 
+  memory-api:
+    environment:
+      ENVIRONMENT: test
+      GRAPHITI_ENABLED: ${GRAPHITI_ENABLED:-false}
+      GRAPHITI_SERVER_URL: http://graphiti-server:8100
+
+  # Graphiti services (profile=graphiti) — included when running
+  # docker compose -f docker-compose.yml -f docker-compose.test.yml --profile graphiti up -d
+  neo4j:
+    profiles: ["graphiti"]
+
+  graphiti-server:
+    profiles: ["graphiti"]
+    environment:
+      ENVIRONMENT: test
+
+  graphiti-mcp:
+    profiles: ["graphiti"]
+
   # Test-only Mock Services
   github-api-mock:
     build:
@@ -38,7 +55,7 @@ services:
     ports:
       - "8085:8085"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8085/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8085/health').read()"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -55,7 +72,7 @@ services:
     ports:
       - "8084:8084"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8084/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8084/health').read()"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -77,8 +94,10 @@ services:
       - context-hydrator
       - knowledge-ingestion
       - connector-registry
+      - memory-api
       - github-api-mock
       - confluence-api-mock
-    command: pytest tests/ -v --tb=short
+    command: pytest tests/ services/memory-api/tests/ -v --tb=short
     networks:
       - memrag-network
+

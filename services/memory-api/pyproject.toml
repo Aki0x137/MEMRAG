@@ -20,6 +20,8 @@ dependencies = [
     "qdrant-client>=1.7.0",
     "redis>=5.0.0",
     "mem0ai>=0.1.0",
+    "fastmcp>=3.0.0",
+    "prometheus-client>=0.20.0",
     "memrag-shared",
 ]
 

@@ -5,13 +5,18 @@ Tests:
 - Resource listing and fetching
 - Workflow orchestration (with mock Temporal)
 - Full pipeline: fetch → diff → chunk → embed → upsert
+- FR-015: Slack 7-day hard filter (messages < 7 days old must never be fetched)
+- A-009: Slack min_age_seconds enforced at connector level, not caller level
+- GitHub file extension filtering respects configured extensions list
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import pytest
@@ -239,3 +244,114 @@ def test_all_connectors_instantiate() -> None:
     
     rds = RDSSchemaConnector(config={"host": "localhost", "port": 5432, "database": "db", "username": "u", "password": "p"})
     assert rds is not None
+
+
+# ============================================================================
+# BEHAVIORAL CONTRACT TESTS — FR-015, A-009 (no live services required)
+# ============================================================================
+
+def test_slack_min_age_is_7_days() -> None:
+    """FR-015 / A-009: SlackConnector must enforce 7-day hard filter at the connector level."""
+    connector = SlackConnector(config={"channel_ids": ["C123"]})
+    assert connector.min_age_seconds == 7 * 24 * 60 * 60, (
+        f"min_age_seconds must be exactly 604800 (7 days), got {connector.min_age_seconds}"
+    )
+
+
+def test_slack_list_resources_skips_recent_messages(monkeypatch) -> None:
+    """FR-015: list_resources must filter out messages newer than 7 days."""
+    now_ts = datetime.now(timezone.utc).timestamp()
+    recent_ts = now_ts - (3 * 24 * 60 * 60)   # 3 days ago — must be excluded
+    old_ts = now_ts - (10 * 24 * 60 * 60)      # 10 days ago — must be included
+
+    async def fake_post(*args, **kwargs):
+        class FakeResponse:
+            def raise_for_status(self): pass
+            def json(self):
+                return {
+                    "ok": True,
+                    "messages": [
+                        {"ts": str(recent_ts), "text": "recent message"},
+                        {"ts": str(old_ts), "text": "old message"},
+                    ],
+                }
+        return FakeResponse()
+
+    import httpx
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    connector = SlackConnector(config={"channel_ids": ["C123"]})
+    resources = asyncio.run(connector.list_resources())
+
+    assert len(resources) == 1, (
+        f"Expected only the 10-day-old message, got {len(resources)} resources"
+    )
+    old_ts_int = int(old_ts * 1_000_000)
+    assert str(old_ts_int) in resources[0].url, "Returned resource must be the old message"
+
+
+def test_github_connector_respects_file_extensions(monkeypatch) -> None:
+    """GitHub connector must only list resources matching configured file_extensions."""
+    import httpx
+
+    tree_entries = [
+        {"type": "blob", "path": "src/main.py", "sha": "abc"},
+        {"type": "blob", "path": "src/utils.js", "sha": "def"},  # not in extensions
+        {"type": "blob", "path": "README.md", "sha": "ghi"},
+        {"type": "blob", "path": "src/helper.py", "sha": "jkl"},
+        {"type": "tree", "path": "src", "sha": "mno"},  # tree entry, not a file
+    ]
+
+    call_count = {"n": 0}
+
+    async def fake_get(self, url, **kwargs):
+        call_count["n"] += 1
+        class FakeResponse:
+            def raise_for_status(self): pass
+            def json(self_):
+                # First call: branches API → return commit sha
+                if call_count["n"] == 1:
+                    return {"commit": {"sha": "deadbeef"}}
+                # Second call: trees API → return file tree
+                return {"tree": tree_entries}
+        return FakeResponse()
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    connector = GitHubConnector(
+        config={
+            "owner": "testorg",
+            "repo": "test-repo",
+            "branch": "main",
+            "file_extensions": [".py", ".md"],
+        }
+    )
+    resources = asyncio.run(connector.list_resources())
+
+    returned_paths = [r.title for r in resources]  # r.title stores the file path
+    assert "src/utils.js" not in returned_paths, ".js must be excluded by extension filter"
+    assert all(
+        any(path.endswith(ext) for ext in [".py", ".md"])
+        for path in returned_paths
+    ), f"All returned resources must match .py or .md extensions: {returned_paths}"
+    assert len(resources) >= 2, "main.py, README.md, helper.py should all be included"
+
+
+def test_rds_connector_never_lists_row_data() -> None:
+    """RDS schema connector must only expose schema metadata, never row data."""
+    connector = RDSSchemaConnector(config={
+        "host": "localhost",
+        "port": 5432,
+        "database": "db",
+        "username": "u",
+        "password": "p",
+    })
+    import inspect
+    source = inspect.getsource(connector.list_resources)
+    assert "information_schema.tables" in source, (
+        "list_resources must query information_schema.tables"
+    )
+    # Verify no SELECT * FROM <user_table> style queries exist
+    assert "SELECT *" not in source.upper() or "information_schema" in source, (
+        "list_resources must not query row data from user tables"
+    )

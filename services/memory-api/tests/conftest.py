@@ -59,6 +59,9 @@ class FakeRedis:
         if ex is not None:
             self.expiry[key] = ex
 
+    def setex(self, key: str, ttl: int, value: str) -> None:
+        self.set(key, value, ex=ttl)
+
     def expire(self, key: str, ttl: int) -> None:
         self.expiry[key] = ttl
 
@@ -95,6 +98,7 @@ class FakeQdrant:
         self.collections: dict[str, dict[str, FakePoint]] = {
             "agent_memories": {},
             "shared_memories": {},
+            "org_knowledge": {},
         }
 
     def upsert(self, collection_name: str, points, wait: bool = True) -> None:
@@ -185,6 +189,36 @@ def fake_ollama():
     return FakeOllama()
 
 
+# ---------------------------------------------------------------------------
+# No-op PostgreSQL connection used by grants.py in tests
+# (FakeRedis returns None for unknown keys, causing load_grants to fall back
+#  to Postgres; _NoopPGConn provides an empty result set so no real DB is
+#  needed.)
+# ---------------------------------------------------------------------------
+
+
+class _NoopPGCursor:
+    def execute(self, *args, **kwargs) -> None:
+        pass
+
+    def fetchall(self):
+        return []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+
+class _NoopPGConn:
+    def cursor(self):
+        return _NoopPGCursor()
+
+    def close(self) -> None:
+        pass
+
+
 @pytest.fixture()
 def client(fake_redis, fake_qdrant, fake_ollama, monkeypatch):
     """Return a TestClient with all infrastructure mocked out."""
@@ -196,6 +230,8 @@ def client(fake_redis, fake_qdrant, fake_ollama, monkeypatch):
     import memrag_shared.memory.shared as shared_mod
     import memrag_shared.recall.layer2 as l2_mod
     import memrag_shared.recall.layer3 as l3_mod
+    import memrag_shared.recall.layer4 as l4_mod
+    import memrag_shared.recall.grants as grants_mod
 
     monkeypatch.setattr(redis_mod, "get_client", lambda: fake_redis)
     monkeypatch.setattr(qdrant_mod, "get_client", lambda: fake_qdrant)
@@ -210,9 +246,15 @@ def client(fake_redis, fake_qdrant, fake_ollama, monkeypatch):
     monkeypatch.setattr(l2_mod, "get_ollama_client", lambda: fake_ollama)
     monkeypatch.setattr(l3_mod, "get_qdrant_client", lambda: fake_qdrant)
     monkeypatch.setattr(l3_mod, "get_ollama_client", lambda: fake_ollama)
+    monkeypatch.setattr(l4_mod, "get_qdrant_client", lambda: fake_qdrant)
+    monkeypatch.setattr(l4_mod, "get_ollama_client", lambda: fake_ollama)
+    # Patch grants module so L4 never tries to open a live PostgreSQL connection
+    monkeypatch.setattr(grants_mod, "get_redis_client", lambda: fake_redis)
+    monkeypatch.setattr(grants_mod, "_get_pg_connection", lambda: _NoopPGConn())
 
     # main.py also imports get_redis at the module level for session routes
     import main as main_mod
     monkeypatch.setattr(main_mod, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr(main_mod, "get_ollama", lambda: fake_ollama)
 
     return TestClient(app)

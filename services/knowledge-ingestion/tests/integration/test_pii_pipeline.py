@@ -15,12 +15,15 @@ from workflows.ingestion import process_ingestion_batch
 
 
 class _FakeCursor:
-    def __init__(self, rows: list[tuple] | None = None) -> None:
+    def __init__(self, rows: list[tuple] | None = None, audit_log: list | None = None) -> None:
         self.rows = rows or []
         self.executed: list[tuple[str, tuple]] = []
+        self._audit_log = audit_log  # shared list to collect INSERT params
 
     def execute(self, query: str, params: tuple = ()) -> None:
         self.executed.append((query, params))
+        if self._audit_log is not None and "PII_AUDIT_LOG" in query.upper():
+            self._audit_log.append(params)
 
     def fetchall(self) -> list[tuple]:
         return self.rows
@@ -37,9 +40,10 @@ class _FakeConnection:
         self.rows: list[tuple] = []
         self.commits = 0
         self.closed = False
+        self.audit_log: list[tuple] = []  # collects (connector_id, workspace_id, resource_id, chunk_index, entity_category, action_taken)
 
     def cursor(self):
-        return _FakeCursor(self.rows)
+        return _FakeCursor(self.rows, audit_log=self.audit_log)
 
     def commit(self) -> None:
         self.commits += 1
@@ -92,6 +96,25 @@ def test_pii_screen_redacts_masks_and_logs(monkeypatch) -> None:
     assert "[EMAIL]" in screened[0]["text"]
     assert screened[0]["metadata"]["pii_masked"] is True
     assert fake_connection.closed is True
+    assert fake_connection.commits >= 1, "Connection must be committed after audit writes"
+
+    # Verify audit log rows were written for each detected entity
+    audit_rows = fake_connection.audit_log
+    assert len(audit_rows) >= 2, f"Expected ≥2 audit rows (EMAIL + one from chunk 2), got {len(audit_rows)}"
+
+    entity_categories = {row[4] for row in audit_rows}  # index 4 = entity_category
+    assert "EMAIL_ADDRESS" in entity_categories, "EMAIL_ADDRESS detection must be audited"
+
+    # No raw PII values in audit rows — only metadata fields
+    for row in audit_rows:
+        connector_id, workspace_id, resource_id, chunk_index, entity_category, action_taken = row
+        assert connector_id == "connector-1"
+        assert workspace_id == "workspace-1"
+        assert entity_category and not any(
+            pii_token in str(entity_category)
+            for pii_token in ["jane@", "415", "4111", "super-secret"]
+        ), f"Raw PII leaked into entity_category audit field: {entity_category}"
+        assert action_taken in {"mask", "redact", "drop"}, f"Unexpected action_taken: {action_taken}"
 
 
 def test_pii_screen_mismatch_raises(monkeypatch) -> None:
