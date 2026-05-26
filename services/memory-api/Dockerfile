@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ENV PATH="/root/.local/bin:$PATH"
-ENV PYTHONPATH="/app/services/memory-api/src:/app/services/agent-workers/src"
+ENV PYTHONPATH="/app/services/memory-api/src"
 
 COPY . .
 

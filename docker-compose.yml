@@ -36,7 +36,7 @@ services:
       - memrag-network
 
   qdrant:
-    image: qdrant/qdrant:v1.9.2
+    image: qdrant/qdrant:v1.18.0
     container_name: memrag-qdrant
     environment:
       QDRANT_API_KEY: ${QDRANT_API_KEY:-memrag-secret}
@@ -102,7 +102,7 @@ services:
       - memrag-network
 
   ollama:
-    image: ollama/ollama:0.6.5
+    image: ollama/ollama:0.21.0
     container_name: memrag-ollama
     environment:
       OLLAMA_HOST: 0.0.0.0:11434

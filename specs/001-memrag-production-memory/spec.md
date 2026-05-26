@@ -23,10 +23,12 @@ conversation continues without restarting from scratch.
 **Why this priority**: Without a crash-safe session buffer, the entire agentic platform is
 unreliable. Every higher-level memory feature depends on session continuity being solved first.
 
-**Independent Test**: Compose services `redis`, `temporal`, `agent-workers` started.
-An agent workflow is launched, an artificial interruption is triggered mid-execution, the
-workflow is resumed, and the assembled context on resume matches the pre-interruption state.
-Delivers value as: agents can run reliably without losing session state.
+**Independent Test**: Compose services `redis`, `memory-api` started.
+An agent calls `POST /api/v1/session/{id}/turns` to checkpoint 12 turns. The `memory-api`
+container is restarted. The agent calls `GET /api/v1/session/{id}/turns` and receives all 12
+turns intact from the Redis-backed store.
+Delivers value as: any HTTP client (any language, any agent framework) can persist and retrieve
+session context reliably without losing state across restarts.
 
 **Acceptance Scenarios**:
 
@@ -59,10 +61,11 @@ silently deduplicated — the memory store does not grow unboundedly with redund
 **Why this priority**: Long-term per-agent memory is the core differentiator of the MEMRAG
 platform. It must work reliably before cross-agent or org-wide features are layered on top.
 
-**Independent Test**: Compose services `qdrant`, `agent-workers`, `ollama` started.
-Agent `db-triage` runs a workflow, produces a finding, then runs a second workflow with a
-related prompt. The second run's context contains the finding from the first run, sourced from
-the vector store. Proves value independently of cross-agent sharing or BYOD.
+**Independent Test**: Compose services `qdrant`, `memory-api`, `ollama` started.
+A caller POSTs a finding to `POST /api/v1/memories`. A second request to
+`POST /api/v1/memories/search` with a semantically related query returns the finding.
+A duplicate POST of the same finding returns `200 OK` without storing a new entry.
+Proves value independently of cross-agent sharing or BYOD.
 
 **Acceptance Scenarios**:
 
@@ -101,10 +104,10 @@ its context, avoids redundant investigation, and includes the prior finding in i
 **Why this priority**: Cross-agent sharing multiplies the value of individual agent runs.
 It requires both L1 (session) and L2 (per-agent) to be stable, so it comes after P1 stories.
 
-**Independent Test**: Compose services `qdrant`, `agent-workers`, `ollama` started.
-Agent A promotes a finding tagged with a known keyword. Agent B is launched with a query
-containing that keyword. Agent B's context includes the promoted finding from Agent A even
-though they share no session history. Validates independently of BYOD.
+**Independent Test**: Compose services `qdrant`, `memory-api`, `ollama` started.
+Agent A calls `POST /api/v1/shared` to promote a finding tagged with a known keyword.
+Agent B calls `POST /api/v1/shared/search` with that keyword and receives the promoted
+finding even though they share no session history. Validates independently of BYOD.
 
 **Acceptance Scenarios**:
 
@@ -236,11 +239,12 @@ agent queries without re-indexing any content.
 **Why this priority**: Access control gates enterprise adoption. It can be built on top of a
 working BYOD pipeline (P2 stories) without requiring changes to ingestion logic.
 
-**Independent Test**: Compose services `connector-registry`, `qdrant`, `agent-workers`
-started. Two workspaces A and B configured. A source is connected in workspace A with scope
-`workspace_internal`. An agent in workspace B queries the org knowledge index. Verify the
-workspace A source is absent from workspace B's results. Change scope to `allowlist` with
-workspace B on the allowlist. Verify the source now appears in workspace B results.
+**Independent Test**: Compose services `connector-registry`, `qdrant`, `redis`,
+`postgres`, `memory-api` started. Two workspaces A and B configured. A source is connected
+in workspace A with scope `workspace_internal`. A caller queries `POST /api/v1/knowledge/search`
+for workspace B. Verify the workspace A source is absent from workspace B's results. Change
+scope to `allowlist` with workspace B on the allowlist. Verify the source now appears in
+workspace B results within one grant-cache expiry interval.
 
 **Acceptance Scenarios**:
 
@@ -282,11 +286,11 @@ a single coherent system prompt with citations for org knowledge chunks.
 **Why this priority**: Full context hydration requires all four layers to be independently
 functional first (P1, P2, P3 stories above). This story validates the integrated assembly.
 
-**Independent Test**: Compose services `redis`, `qdrant`, `agent-workers`, `ollama`,
-`context-hydrator`, `temporal` all started. An agent with past personal memories, access to
-a workspace with shared memories, and at least one connected org knowledge source is launched.
-Inspect the assembled system prompt and verify chunks from all four layers are present, ranked,
-and within the configured token budget.
+**Independent Test**: Compose services `redis`, `qdrant`, `memory-api`, `ollama`,
+`postgres` all started. A caller seeds Layer 1 turns, Layer 2 agent facts, Layer 3 shared
+findings, and Layer 4 org knowledge. A single call to `POST /api/v1/hydrate` (or the MCP
+`recall_memory` tool) returns a ranked, token-budget-compliant system prompt with content
+from all four layers and Layer 4 citations.
 
 **Acceptance Scenarios**:
 
@@ -329,18 +333,19 @@ enabling relationship traversal. The full end-to-end capability requires US3 (sh
 and US7 (full hydration) to be complete first, but the Graphiti foundation work (Compose
 profile, adapters, `memory-api`) can be built earlier in parallel once US3 exists.
 
-**Independent Test**: Compose services `graphiti-server`, `neo4j`, `agent-workers`,
-`temporal` started (with `GRAPHITI_ENABLED=true`). Agent A promotes Finding X to the graph.
-Agent B promotes Finding Y that contradicts Finding X (same entity, different conclusion).
-Assert the graph has two edges for the same entity: one with `t_invalid` set (old belief,
-Agent A) and one as the current active edge (Agent B). Assert that a graph traversal from
-Finding Y surfaces Finding X as its predecessor with provenance metadata. Assert agents
-with `GRAPHITI_ENABLED=false` continue to use Qdrant L3 path unchanged.
+**Independent Test**: Compose services `graphiti-server`, `neo4j`, `memory-api`, `qdrant`,
+`redis` started (with `GRAPHITI_ENABLED=true`). Caller A promotes Finding X to the graph via
+`POST /api/v1/shared`. Caller B promotes Finding Y that contradicts Finding X (same entity,
+different conclusion). Assert the graph has two edges for the same entity: one with
+`t_invalid` set (old belief, Caller A) and one as the current active edge (Caller B). Assert
+that a graph traversal from Finding Y surfaces Finding X as its predecessor with provenance
+metadata. Assert requests with `GRAPHITI_ENABLED=false` continue to use the Qdrant L3 path
+unchanged.
 
 **Acceptance Scenarios**:
 
-1. **Given** `GRAPHITI_ENABLED=true` and an agent promotes a finding, **When** the promotion
-   activity runs, **Then** the finding is ingested via Graphiti `add_episode`: entities and
+1. **Given** `GRAPHITI_ENABLED=true` and a caller promotes a finding, **When** the promotion
+  request runs, **Then** the finding is ingested via Graphiti `add_episode`: entities and
    relationships are extracted, a temporal edge is created with `t_valid` set to the current
    time, and the episode is queryable immediately by other agents.
 
@@ -354,12 +359,12 @@ with `GRAPHITI_ENABLED=false` continue to use Qdrant L3 path unchanged.
 
 4. **Given** an agent manifest includes `"graphiti-mcp"` in its `mcp_servers` list and an
   external `mcp-registry` service from the enterprise-agentic-platform deployment has been
-  configured with the Graphiti MCP server, **When** the AgentWorkflow initialises its tool
-  context by reading `manifest.mcp_servers`, **Then** the tools `add_episode`,
+  configured with the Graphiti MCP server, **When** the consuming agent runtime initialises
+  its tool context by reading `manifest.mcp_servers`, **Then** the tools `add_episode`,
   `search_facts`, `get_entity`, and `get_related_entities` are available to the agent's
   reasoning loop.
 
-5. **Given** `GRAPHITI_ENABLED=false`, **When** an agent workflow runs, **Then** Layer 3
+5. **Given** `GRAPHITI_ENABLED=false`, **When** a Layer 3 recall request runs, **Then** Layer 3
    recall falls back to the existing Qdrant `shared_memories` path with zero code change
    and zero impact on p95 latency.
 
@@ -380,27 +385,28 @@ pgvector store. Providing a thin compatibility REST API removes the only barrier
 — the need to refactor enterprise activity code. It requires all lower-layer memory features
 (US1–US3) to be stable first.
 
-**Independent Test**: Compose services `memory-api`, `qdrant`, `agent-workers`, `redis`,
-`temporal` started. Call `POST /api/v1/memories` to store a fact. Call
-`POST /api/v1/memories/search` with a semantically related query. Assert the response
-is a `list[str]` (identical contract to enterprise `activities_memory.py`). Assert
-`X-Workspace-ID` and `X-Agent-ID` headers enforce tenant and agent scoping.
+**Independent Test**: Compose services `memory-api`, `qdrant`, `redis`, `ollama` started.
+Call `POST /api/v1/memories` to store a fact. Call `POST /api/v1/memories/search` with a
+semantically related query. Assert the response is a `list[str]` (identical contract to
+enterprise `activities_memory.py`). Assert `X-Workspace-ID`, `X-Tenant-ID`, and
+`X-Agent-ID` headers enforce tenant and agent scoping. Additionally call the `/mcp` endpoint with the MCP
+`store_memory` tool and verify it stores via the same backend.
 
 **Acceptance Scenarios**:
 
 1. **Given** a caller sends `POST /api/v1/memories` with `{agent_id, content, metadata}` and
-  `X-Workspace-ID` plus `X-Agent-ID` headers, **When** the request is processed, **Then** the fact is stored
+  `X-Workspace-ID` (or legacy alias `X-Tenant-ID`) plus `X-Agent-ID` headers, **When** the request is processed, **Then** the fact is stored
    via `mem0_client.extract_and_store` in the appropriate `agent_memories` collection and
    `200 OK` is returned; calling again with identical content returns `200 OK` without
    creating a duplicate (dedup applied).
 
 2. **Given** a caller sends `POST /api/v1/memories/search` with `{query, agent_id, limit}`
-  and `X-Workspace-ID` plus `X-Agent-ID` headers, **When** the request is processed, **Then** the response
+  and `X-Workspace-ID` (or legacy alias `X-Tenant-ID`) plus `X-Agent-ID` headers, **When** the request is processed, **Then** the response
    body is a JSON `list[str]` of the top-K most relevant memory strings — the same contract
    as the enterprise `recall_memories()` function.
 
 3. **Given** memories have been stored for workspace A under agent `db-triage`, **When** a
-  search is performed with workspace B's `X-Workspace-ID` header, the same `agent_id`, and
+  search is performed with workspace B's `X-Workspace-ID` header (or `X-Tenant-ID` alias), the same `agent_id`, and
   an `X-Agent-ID` header for that agent, **Then** the response is an empty list — workspace A memories are never visible to
    workspace B callers.
 
@@ -444,7 +450,10 @@ is a `list[str]` (identical contract to enterprise `activities_memory.py`). Asse
 #### Core Memory
 
 - **FR-001**: The system MUST persist agent findings as compact, searchable atomic facts after
-  each workflow completion without blocking the workflow response.
+  each completed agent turn or explicit memory-store request without blocking the caller's
+  broader reasoning loop. `memory-api` handlers MAY complete the persistence operation within
+  the request/response cycle, but the integration contract MUST support asynchronous,
+  non-blocking use by consuming agent runtimes.
 
 - **FR-002**: The system MUST deduplicate new memory entries against existing memories before
   storing, using semantic similarity; near-identical entries (similarity ≥ 0.95) MUST be
@@ -463,11 +472,10 @@ is a `list[str]` (identical contract to enterprise `activities_memory.py`). Asse
 - **FR-006**: Cross-agent shared memory MUST be strictly scoped to the originating workspace;
   no shared memory entry from workspace A MUST ever appear in workspace B's recall results.
 
-- **FR-007**: The session buffer MUST be durably checkpointed at each workflow activity
-  boundary so the assembled context window is reconstructable after a crash or replay.
-  Payloads larger than 256KB MUST be stored by reference (pointer to external storage, e.g.
-  Redis or object store) rather than inlined into Temporal event history, to avoid Temporal's
-  per-event and total-history size limits.
+- **FR-007**: The session buffer MUST be durably checkpointed via `POST /api/v1/session/{id}/turns`
+  after each agent turn, so the assembled context window is reconstructable after a service
+  restart. Payloads larger than 256KB MUST be stored by reference (pointer to an external Redis
+  key) rather than inlined in the session index key, keeping the index compact and fast.
 
 - **FR-008**: Session buffer keys MUST expire automatically after 24 hours of inactivity with
   no operator intervention required.
@@ -626,15 +634,28 @@ is a `list[str]` (identical contract to enterprise `activities_memory.py`). Asse
   `"graphiti-mcp"` in their `AgentManifest.mcp_servers` list. These tools MUST be served by
   Graphiti's native MCP server (`graphiti-mcp` Compose service) and MAY be surfaced through
   an external `mcp-registry` service supplied by the enterprise-agentic-platform deployment.
-  MEMRAG itself does not implement `mcp-registry`. No new Temporal activities are required to
-  expose these tools beyond reading `manifest.mcp_servers` during workflow tool-context
-  initialisation.
+  MEMRAG itself does not implement `mcp-registry`. No MEMRAG-side Temporal activities are
+  required to expose these tools; consuming agent runtimes are responsible for reading
+  `manifest.mcp_servers` during tool-context initialisation.
 
-- **FR-035**: The platform MUST expose an enterprise memory compatibility REST API at
-  `POST /api/v1/memories` (store a fact) and `POST /api/v1/memories/search` (recall top-K
-  facts). Both endpoints MUST accept `X-Workspace-ID` and `X-Agent-ID` headers for
-  multi-tenant isolation. The response contract for `/search` MUST be a JSON `list[str]`,
-  identical to the enterprise `activities_memory.py` `recall_memories()` return type.
+- **FR-035**: The platform MUST expose a unified HTTP service (`memory-api`, port 8083)
+  covering all four memory layers via REST and an MCP-compatible endpoint:
+  Layer 1: `POST /api/v1/session/{id}/turns` (checkpoint), `GET /api/v1/session/{id}/turns`
+  (recall); Layer 2: `POST /api/v1/memories` (store), `POST /api/v1/memories/search` (recall);
+  Layer 3: `POST /api/v1/shared` (promote), `POST /api/v1/shared/search` (recall); Layer 4:
+  `POST /api/v1/knowledge/search` (recall), `POST /api/v1/ingest` (trigger BYOD job);
+  Assembly: `POST /api/v1/hydrate` (parallel L1-L4 fan-out + domain-weighted re-rank +
+  token-budget enforcement — replaces the separate `context-hydrator` service).
+  All stateful endpoints accept `X-Workspace-ID` and `X-Agent-ID` headers. `X-Tenant-ID`
+  MUST also be accepted as a legacy alias for `X-Workspace-ID`. Session routes MUST accept
+  `X-Agent-ID` for correlation/audit parity even though Redis keying remains scoped by
+  `(workspace_id, session_id)`. The
+  `/memories/search` response MUST be a JSON `list[str]` for enterprise
+  `activities_memory.py` drop-in compatibility.
+  An MCP endpoint (`/mcp`) MUST expose `recall_memory`, `store_memory`, `promote_finding`,
+  and `search_knowledge` as MCP tools (JSON-RPC over HTTP+SSE per the MCP 2025-06-18 spec),
+  enabling any MCP-compatible agent framework (Claude, pydantic-ai, LangChain, etc.) to use
+  MEMRAG without custom integration code.
 
 - **FR-036**: All Graphiti-specific behaviour (FR-033, FR-034) MUST be gated behind the
   `GRAPHITI_ENABLED=true` environment variable. When `GRAPHITI_ENABLED` is absent or `false`,
@@ -700,16 +721,16 @@ is a `list[str]` (identical contract to enterprise `activities_memory.py`). Asse
   (≤11% unique storage rate). Measured against this specific benchmark fixture; no general
   uniqueness guarantee is implied for corpora with different similarity distributions.
 
-- **SC-003**: An agent workflow interrupted mid-execution resumes with its full pre-interruption
-  context intact — all Temporal activity outputs and session buffer contents are recoverable
-  — with no manual operator intervention required. Large payloads are stored by reference
-  (see FR-007) and retrieved on resume; the reconstructed context is semantically identical
-  to the pre-interruption state.
+- **SC-003**: An agent that checkpoints its session turns via `POST /api/v1/session/{id}/turns`
+  can recover its full context after a `memory-api` restart — all turns are stored in Redis
+  and retrievable via `GET /api/v1/session/{id}/turns` with no manual operator intervention.
+  Large payloads stored by reference (see FR-007) are fetched by pointer on recovery;
+  the reconstructed context is semantically identical to the pre-restart state.
 
 - **SC-004**: A finding promoted to shared workspace memory by Agent A is available in Agent
-  B's recall results within one workflow round-trip after promotion (i.e., without requiring
+  B's recall results within one request round-trip after promotion (i.e., without requiring
   any additional triggers or manual steps). Validated via async integration test: Agent A's
-  promotion workflow is awaited to completion; Agent B's workflow is then started and its
+  promotion request is awaited to completion; Agent B's recall request is then issued and its
   assembled context is asserted to contain the promoted finding (polling with up to 5-second
   timeout).
 
@@ -730,9 +751,9 @@ is a `list[str]` (identical contract to enterprise `activities_memory.py`). Asse
 - **SC-007**: A sharing scope change (e.g., `private` → `workspace_internal`) propagates to
   all new agent queries within 60 seconds with no re-indexing or service restart required.
 
-- **SC-008**: When one of the three vector recall activities fails at workflow start,
-  the remaining workflow completes successfully and delivers a response to the caller — the
-  failure of one recall layer does not fail the workflow.
+- **SC-008**: When one of the three vector recall paths fails at hydrate/request start,
+  the remaining request completes successfully and delivers a response to the caller — the
+  failure of one recall layer does not fail the overall memory response.
 
 - **SC-009**: Context hydration for an agent with results from all four memory layers
   assembles a token-budget-compliant system prompt in under 200ms (p95), measured from when
@@ -771,9 +792,15 @@ is a `list[str]` (identical contract to enterprise `activities_memory.py`). Asse
   LLM) runs through the local Ollama runtime exposed at `OLLAMA_HOST`. No separate LLM
   gateway or external cloud LLM APIs are required for local operation.
 
-- **A-003**: Temporal is the workflow orchestration layer for both agent execution
-  (AgentWorkflow) and knowledge ingestion (IngestionWorkflow). No other orchestration
-  framework is used.
+- **A-003**: Temporal is the workflow orchestration layer for BYOD knowledge ingestion
+  (`IngestionWorkflow`) and nightly memory decay (`DecayMemoriesWorkflow`) only — both in
+  the `knowledge-ingestion` service. Session memory (Layer 1), per-agent memory (Layer 2),
+  and shared memory (Layer 3) operations are direct async Python calls within the `memory-api`
+  HTTP service; no Temporal orchestration is needed for these direct async request-handling
+  patterns. LLM inference (500ms–10s per reasoning step) dominates agent turn latency;
+  Temporal overhead on 10–50ms memory I/O operations is unnecessary complexity. The
+  `AgentWorkflow` Temporal class does not exist in MEMRAG; external agents call `memory-api`
+  REST or MCP endpoints directly.
 
 - **A-004**: Qdrant is the primary vector store. Three collections are used: `agent_memories`
   (per-agent long-term, L2), `shared_memories` (cross-agent workspace, L3 Qdrant path),
@@ -810,7 +837,7 @@ is a `list[str]` (identical contract to enterprise `activities_memory.py`). Asse
 
 - **A-008**: Graphiti temporal knowledge graph is implemented as an optional Layer 3 backend
   across Phase 6 (foundation: Compose profile, adapters, `memory-api`) and Phase 11
-  (workflow integration + end-to-end validation), gated by `GRAPHITI_ENABLED=true`.
+  (request-path integration + end-to-end validation), gated by `GRAPHITI_ENABLED=true`.
   Graphiti (Apache 2.0, zep/graphiti) provides
   temporal validity windows (`t_valid`/`t_invalid`) on edges, LLM-based entity extraction,
   conflict resolution, and hybrid retrieval (semantic + BM25 + graph traversal). It runs as
@@ -883,9 +910,10 @@ is a `list[str]` (identical contract to enterprise `activities_memory.py`). Asse
   live Atlassian instance in CI and local development, and is the primary test path for the
   Confluence connector (FR-031).
 
-- **A-019**: All agent-worker and context-hydrator services expose Prometheus metrics on
-  `/metrics`. Key instrumentation includes the `memory_recall_latency_seconds` histogram
-  (per-layer, per-`workspace_id`) and the `context_hydration_assembly_ms` histogram.
+- **A-019**: `memory-api`, `knowledge-ingestion`, and `connector-registry` expose
+  Prometheus metrics on `/metrics`. Key instrumentation includes the
+  `memory_recall_latency_seconds` histogram (per-layer, per-`workspace_id`) and the
+  `context_hydration_assembly_ms` histogram.
   Grafana dashboards are deferred to the operations phase; metric collection is required
   from initial deployment.
 
@@ -922,6 +950,12 @@ is a `list[str]` (identical contract to enterprise `activities_memory.py`). Asse
 - Q: SC-004 "one workflow round-trip" not a wall-clock bound — how to test? → A: Async integration tests; Agent A promotion awaited to completion, Agent B workflow started, context polled for finding (up to 5-second timeout).
 - Q: Tombstone threshold + archival mechanism undefined (A-012) → A: Archive to S3 Apache Iceberg (`s3://memrag-archive/memory-tombstones/`) before deletion from Qdrant; threshold = decay score < 0.1.
 - Q: Token budget Layer 1 session turns have no score; FR-027 trim ordering undefined → A: Session turns exempt from score-based trimming (oldest removed first if over budget); scored chunks from L2/L3/L4 fill remaining budget; weight matrix derived from §4.6 of architecture doc with `data` domain and `slack` source type added.
+
+### Session 2026-05-26
+
+- Q: Should Temporal orchestrate Layer 1–3 memory operations (session, agent memory, shared memory)? → A: No. Temporal is justified only for long-running async processes with HITL or at-least-once delivery requirements (`IngestionWorkflow`, `DecayMemoriesWorkflow`). L1–L3 operations are direct async request-handling paths served by `memory-api` HTTP handlers calling `memrag-shared` library functions. Temporal overhead on 10–50ms memory I/O is unnecessary; LLM inference (500ms–10s) dominates agent turn latency. The `AgentWorkflow` Temporal class is eliminated from MEMRAG — external agents call the `memory-api` REST or MCP interface directly.
+- Q: REST or gRPC for the memory API? → A: REST+MCP. MCP (Model Context Protocol, the emerging standard for agent tool integration) uses JSON-RPC over HTTP+SSE — gRPC is incompatible. REST enables universal adoption across every language, SDK, and agent framework with zero custom integration code. LLM inference dominates latency; the 5–20ms REST vs gRPC protocol difference is negligible at agent turn scale. gRPC may be added as a secondary interface if high-throughput internal service calls prove to be a bottleneck, but REST+MCP covers all current integration patterns and matches the enterprise-agentic-platform's existing HTTP-based skill/tool invocation model.
+- Q: Should `context-hydrator` remain a separate service? → A: No. Context assembly (weight-matrix re-ranking + token-budget enforcement) is a synchronous library function. Adding a separate HTTP hop from `memory-api` → `context-hydrator` adds latency toward the SC-009 200ms p95 budget and doubles operational surface for no benefit. The `assembler.py` and `weights.py` modules move into `memrag-shared` and are imported directly by `memory-api`'s `/api/v1/hydrate` endpoint.
 
 ### Session 2026-05-25
 
