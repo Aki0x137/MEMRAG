@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from temporalio import activity
 
-from infra.ollama_client import get_client as get_ollama_client
-from memory.shared import promote_to_shared
+from activities.memory import _store_shared_finding
 
 # Tool schema for model-aware tool calling (Ollama native + JSON fallback).
 PROMOTE_FINDING_TOOL_SCHEMA: dict = {
@@ -36,12 +35,11 @@ async def promote_finding_to_shared_knowledge(
     source_agent_id: str,
     text: str,
 ) -> dict:
-    """Generate an embedding for *text* and promote it to shared_memories."""
-    embedding = (await get_ollama_client().embed([text]))[0]
-    status = await promote_to_shared(
+    """Promote a finding through the active Layer 3 backend."""
+    status = await _store_shared_finding(
         workspace_id=workspace_id,
         source_agent_id=source_agent_id,
-        text=text,
-        embedding=embedding,
+        finding_text=text,
+        episode_metadata={"source_agent_id": source_agent_id},
     )
     return {"status": status}

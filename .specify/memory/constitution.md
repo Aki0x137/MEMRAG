@@ -16,7 +16,7 @@ Templates updated:
 
 # MEMRAG Constitution
 
-**Technology Stack**: Docker Compose, pinned container images, uv inside containers, Python 3.11+, MCP, local model runtime (for example Ollama), Qdrant, SQLite  
+**Technology Stack**: Docker Compose, pinned container images, uv inside containers, Python 3.11+, MCP, local model runtime (for example Ollama), Qdrant, PostgreSQL  
 **Environment**: Container-native development and deployment  
 **Goal**: Establish non-negotiable standards for this memory, RAG, and BYOD architecture
 
@@ -135,7 +135,7 @@ prevents host-only drift from hiding failures.
 | uv | Latest stable | Fast, reliable, lock-file based dependency management inside containers |
 | Local model runtime | Pinned image tag | Local GPU model serving and caching |
 | Qdrant | Pinned image tag | Vector DB, on-disk persistence, cosine distance |
-| SQLite | 3.40+ | Relational storage, zero setup, file-based |
+| PostgreSQL | 16+ | Relational storage for connector registry, audit metadata, workflow state, and pgvector-backed compatibility paths |
 | MCP | Project-defined | Stable tool and service interfaces |
 
 ### Recommended Tools

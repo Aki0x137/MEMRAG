@@ -9,12 +9,16 @@
 
 Build a multi-tenant, multi-layer memory and knowledge platform for AI agents. Layer 1
 (Redis) buffers the live session; Layer 2 (Qdrant + Mem0) persists per-agent facts with
-decay; Layer 3 (Qdrant) holds workspace-shared findings; Layer 4 (Qdrant) indexes BYOD
-org knowledge from GitHub, Confluence, Slack, and RDS Schema connectors. A domain-aware
-weight matrix blends recall results in the context-hydrator before injection into the agent
-prompt. PII is screened by Presidio on every ingestion path. Temporal orchestrates async
-workflows including daily decay crons and HITL PII review. All data within a workspace is
-strictly isolated; cross-workspace sharing requires explicit grants.
+decay; Layer 3 (Qdrant, upgraded to Graphiti + Neo4j when `GRAPHITI_ENABLED=true`) holds
+workspace-shared findings with optional temporal validity and causal chain traversal; Layer 4
+(Qdrant) indexes BYOD org knowledge from GitHub, Confluence, Slack, and RDS Schema connectors.
+A domain-aware weight matrix blends recall results in the context-hydrator before injection
+into the agent prompt. PII is screened by Presidio on every ingestion path. Temporal
+orchestrates async workflows including daily decay crons and HITL PII review. All data within
+a workspace is strictly isolated; cross-workspace sharing requires explicit grants. A thin
+enterprise compatibility REST API (`memory-api` service) exposes `POST /api/v1/memories` and
+`POST /api/v1/memories/search` so external platforms (e.g., enterprise-agentic-platform) can
+replace their flat pgvector memory layer with MEMRAG without rewriting workflow logic.
 
 **Terminology Note**: "Layer 4" and "org knowledge" refer to the same concept in the memory
 model. "Layer 4" refers to the memory layer in the four-layer recall architecture (Layer 1 =
@@ -22,9 +26,10 @@ session, L2 = agent, L3 = shared, L4 = org knowledge); "org knowledge" refers to
 collection that stores BYOD-indexed content. Both terms are interchangeable throughout this
 plan and tasks.
 
-**Stack**: Python 3.11 (agent-workers, context-hydrator, knowledge-ingestion, llm-gateway)
-· Go 1.22 (connector-registry) · Temporal 1.24.2 · Qdrant v1.9.2 · Mem0 ≥0.1.0 ·
-Redis 7.2-alpine · PostgreSQL 16-alpine + pgvector · Presidio ≥2.2.355 · Ollama (GPU) ·
+**Stack**: Python 3.11 (agent-workers, context-hydrator, knowledge-ingestion,
+memory-api) · Go 1.22 (connector-registry) · Temporal 1.24.2 · Qdrant v1.9.2 · Mem0 ≥0.1.0 ·
+Redis 7.2-alpine · PostgreSQL 16-alpine + pgvector · Presidio ≥2.2.355 · Graphiti (optional,
+`graphiti-client≥0.3.0`) · Neo4j 5.20 (optional, Graphiti backend) · Ollama (GPU) ·
 PyIceberg ≥0.7.0 / MinIO · boto3/botocore (AWS integrations) · aws-sdk-go-v2
 (`config`, `secretsmanager`, `appconfigdata`) · Prometheus v2.52.0
 
@@ -51,8 +56,8 @@ qwen3-embedding:4b (Ollama), gemma4:12b (Ollama)
 
 | Gate | Status | Notes |
 |---|---|---|
-| All runtime components in Docker Compose, no host execution | **PASS** | 12 Compose services (4 app + 2 test-only mocks + 6 infra): see Project Structure |
-| Pinned image tags; health checks; `depends_on: condition: service_healthy` | **PASS** | All infra images pinned (e.g., `redis:7.2-alpine`, `qdrant/qdrant:v1.9.2`, `temporalio/auto-setup:1.24.2`). Health checks required on all new services. |
+| All runtime components in Docker Compose, no host execution | **PASS** | 12 always-on Compose services (5 app + 7 infra), plus 2 test-only mocks in `docker-compose.test.yml` and 3 optional `graphiti` profile services: see Project Structure |
+| Pinned image tags; health checks; `depends_on: condition: service_healthy` | **PASS** | All runtime images are pinned (e.g., `redis:7.2-alpine`, `qdrant/qdrant:v1.9.2`, `temporalio/auto-setup:1.24.2`, `ollama/ollama:0.6.5`). Health checks required on all new services. |
 | GPU inference service with NVIDIA device reservation | **PASS** | `ollama` service uses `deploy.resources.reservations.devices` |
 | Container-native test commands | **PASS** | `docker compose exec agent-workers pytest tests/unit/` and `docker compose -f docker-compose.test.yml up --exit-code-from app` |
 | Config via env vars and named volumes; no hardcoded paths/secrets | **PASS** | `.env` for all secrets; `credential_ref` references secrets store path; named Compose volumes for Qdrant, Postgres, Minio, Redis |
@@ -127,7 +132,7 @@ tests/
     └── confluence-api-mock/    # Confluence REST API mock with full OAuth 2.0 3-LO + CQL
 
 # Compose files
-docker-compose.yml          # dev stack (13 services)
+docker-compose.yml          # dev stack (12 always-on services; 3 optional `graphiti` profile services)
 docker-compose.test.yml     # test stack — mocks substituted for real external APIs
 .env.example
 
@@ -141,8 +146,8 @@ packages/
 and one Go module. Shared Python types in `packages/memrag-shared` to avoid duplication of
 `AgentManifest` and the weight matrix across service boundaries.
 
-**Scope boundary**: `services/` contains only the four core memory-layer services
-(agent-workers, context-hydrator, knowledge-ingestion, connector-registry). LLM inference
+**Scope boundary**: `services/` contains only the five core memory-layer services
+(agent-workers, context-hydrator, knowledge-ingestion, connector-registry, memory-api). LLM inference
 is provided by the GPU-resident `ollama` container; all Python services call Ollama directly
 at `OLLAMA_HOST` — no extra gateway proxy is owned by this repo. Mock services used in
 `ENVIRONMENT=test` live under `tests/mocks/` and are not production images. Example agents
@@ -160,17 +165,19 @@ implementation.
 | `context-hydrator` | `python:3.11-slim` (built) | 8081 | assemble() RPC; exposes `/metrics` |
 | `knowledge-ingestion` | `python:3.11-slim` (built) | — | Temporal worker (IngestionWorkflow, DecayMemoriesWorkflow) |
 | `connector-registry` | `golang:1.22-alpine` (built) | 8082 | Connector CRUD REST API + HITL signal relay + AWS AppConfig/Secrets Manager clients |
+| `memory-api` | `python:3.11-slim` (built) | 8083 | Enterprise compatibility REST API (`POST /api/v1/memories`, `POST /api/v1/memories/search`) |
 | `github-api-mock` *(test only)* | `python:3.11-slim` (built) | 8085 | GitHub REST API mock (`tests/mocks/`) |
 | `confluence-api-mock` *(test only)* | `python:3.11-slim` (built) | 8084 | Confluence OAuth 3-LO + CQL mock (`tests/mocks/`) |
-| `ollama` | `ollama/ollama:latest`* | 11434 | GPU-resident LLM + embedding inference |
+| `ollama` | `ollama/ollama:0.6.5` | 11434 | GPU-resident LLM + embedding inference |
 | `qdrant` | `qdrant/qdrant:v1.9.2` | 6333 | Vector DB (3 collections) |
 | `postgres` | `postgres:16-alpine` | 5432 | Relational store |
 | `redis` | `redis:7.2-alpine` | 6379 | Session cache + grants cache |
 | `temporal` | `temporalio/auto-setup:1.24.2` | 7233 | Workflow engine |
 | `minio` | `minio/minio:RELEASE.2024-05-10T01-41-38Z` | 9000/9001 | S3-compatible archive (dev) |
 | `prometheus` | `prom/prometheus:v2.52.0` | 9090 | Metrics scrape + storage |
-
-*Ollama pin: use `ollama/ollama:0.1.44` or latest stable tag; confirm before implementation.
+| `graphiti-server` *(optional, `graphiti` Compose profile)* | `zep/graphiti-server:0.3` | 8100 | Graphiti temporal KG engine; only active when `GRAPHITI_ENABLED=true` |
+| `graphiti-mcp` *(optional, `graphiti` Compose profile)* | `zep/graphiti-mcp:0.3` | 8101 | Graphiti native MCP server; can be registered in an external `mcp-registry` from enterprise-agentic-platform |
+| `neo4j` *(optional, `graphiti` Compose profile)* | `neo4j:5.20` | 7474/7687 | Graph DB backing Graphiti; named volume `neo4j_data` |
 
 ---
 
@@ -180,11 +187,15 @@ implementation.
 
 ```
 START → fetchRecentSession (Layer 1, Redis)
-      → parallel: [recallAgentMemory (Layer 2), recallSharedMemory (Layer 3), recallOrgKnowledge (Layer 4)]
+      → parallel: [recallAgentMemory (Layer 2, Qdrant), recallSharedMemory (Layer 3), recallOrgKnowledge (Layer 4, Qdrant)]
+            Layer 3 path: if GRAPHITI_ENABLED=true → recall_shared_graphiti (Graphiti search_facts)
+                          if GRAPHITI_ENABLED=false → recall_shared_memory (Qdrant shared_memories)
       → assemble (context-hydrator)
       → callLLM (Ollama via OLLAMA_HOST — called directly by agent-workers)
       → storeMemory (Mem0 extract + Qdrant upsert)
-      → optionally: promoteToShared (Layer 3 upsert)
+      → optionally: promoteToShared
+            if GRAPHITI_ENABLED=true → store_with_graphiti (add_episode → Neo4j temporal edge)
+            if GRAPHITI_ENABLED=false → promoteToShared (Qdrant shared_memories upsert)
 END
 ```
 
@@ -224,3 +235,6 @@ END
 | Mem0 for store/extract only; custom Qdrant hybrid recall | Mem0's built-in recall doesn't support hybrid BM25+dense with RRF; A-005 resolution | Using Mem0 recall would forfeit dense+sparse fusion and the domain weight matrix |
 | 3 Qdrant collections (not 1) | Access control scoping differs: agent-scoped vs workspace-scoped vs cross-workspace; separate collections allow payload index isolation without cross-tenant leakage | A single collection with a filter field would require careful payload index sizing and increases risk of misconfigured multi-tenant filter bugs |
 | PyIceberg + MinIO for tombstone archive | Compliance requirement for audit trail before deletion from Qdrant | Writing tombstones to PostgreSQL would conflict with the append-only constraint and grow unboundedly |
+| Graphiti + Neo4j as optional L3 backend (feature-gated) | FR-033 requires temporal validity windows and conflict resolution for shared findings — capabilities that Qdrant and PostgreSQL cannot provide; Graphiti (Apache 2.0, 25k+ stars) ships these battle-tested under one dependency | Implementing temporal edges + conflict resolution manually in Qdrant payload fields would require custom deduplication, conflict detection, and traversal logic duplicating what Graphiti already provides; building a custom `kg-service` (as in enterprise-agentic-platform) yields an inferior subset of Graphiti without temporal validity or MCP-native integration |
+| `graphiti` Compose profile (opt-in) | Neo4j is a heavy stateful dependency; most development and testing scenarios do not require graph memory — the existing Qdrant L3 path is fully functional without it | Always-on would add ≈1.5 GB RAM overhead and slow `docker compose up` for developers not testing graph features |
+| `memory-api` separate service (not endpoint on context-hydrator) | FR-035 enterprise compatibility API has a distinct auth pattern (header-based `X-Workspace-ID`/`X-Agent-ID`) and lifecycle separate from context assembly; mixing concerns would make the hydrator harder to reason about and independently scale | Adding routes to context-hydrator risks coupling hydration latency SLA (SC-009, 200ms p95) with enterprise compat call latency |

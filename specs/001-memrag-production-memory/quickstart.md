@@ -93,8 +93,8 @@ All containers should show `healthy`. If any show `(health: starting)`, wait 30 
 
 ## 3. Pull the Embedding & LLM Models
 
-The `llm-gateway` container pulls models from the GPU-resident Ollama container automatically
-on first start. To pull manually:
+The `ollama` container stores and serves the local models used by the stack. To pull them
+manually:
 
 ```bash
 docker compose exec ollama ollama pull qwen3-embedding:4b

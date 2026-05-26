@@ -102,7 +102,7 @@ services:
       - memrag-network
 
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.6.5
     container_name: memrag-ollama
     environment:
       OLLAMA_HOST: 0.0.0.0:11434
@@ -197,6 +197,14 @@ services:
       REDIS_URL: redis://redis:6379
       OLLAMA_HOST: http://ollama:11434
       OLLAMA_DEVICE: ${OLLAMA_DEVICE:-cuda}
+      OLLAMA_CHAT_MODEL: ${OLLAMA_CHAT_MODEL:-gemma4:12b}
+      OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-qwen3-embedding:4b}
+      GRAPHITI_ENABLED: ${GRAPHITI_ENABLED:-false}
+      GRAPHITI_SERVER_URL: ${GRAPHITI_SERVER_URL:-http://graphiti-server:8100}
+      GRAPHITI_MCP_SERVER_URL: ${GRAPHITI_MCP_SERVER_URL:-http://graphiti-mcp:8101}
+      NEO4J_URI: ${NEO4J_URI:-bolt://neo4j:7687}
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-memrag-neo4j}
       AWS_REGION: ${AWS_REGION:-us-east-1}
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
@@ -295,8 +303,6 @@ services:
       AWS_RDS_REGION: ${AWS_RDS_REGION:-us-east-1}
       AWS_RDS_IAM_ENABLED: ${AWS_RDS_IAM_ENABLED:-false}
       AWS_RDS_SSL_MODE: ${AWS_RDS_SSL_MODE:-require}
-    ports:
-      - "8083:8083"
     depends_on:
       temporal:
         condition: service_healthy
@@ -317,6 +323,108 @@ services:
     networks:
       - memrag-network
 
+  memory-api:
+    build:
+      context: .
+      dockerfile: services/memory-api/Dockerfile
+    container_name: memrag-memory-api
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      QDRANT_HOST: qdrant:6333
+      REDIS_URL: redis://redis:6379
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_CHAT_MODEL: ${OLLAMA_CHAT_MODEL:-gemma4:12b}
+      OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-qwen3-embedding:4b}
+      GRAPHITI_ENABLED: ${GRAPHITI_ENABLED:-false}
+      GRAPHITI_SERVER_URL: ${GRAPHITI_SERVER_URL:-http://graphiti-server:8100}
+      GRAPHITI_MCP_SERVER_URL: ${GRAPHITI_MCP_SERVER_URL:-http://graphiti-mcp:8101}
+      NEO4J_URI: ${NEO4J_URI:-bolt://neo4j:7687}
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-memrag-neo4j}
+    ports:
+      - "8083:8083"
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - memrag-network
+
+  neo4j:
+    image: neo4j:5.20
+    container_name: memrag-neo4j
+    profiles: ["graphiti"]
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-memrag-neo4j}
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/7687' 2>/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - memrag-network
+
+  graphiti-server:
+    image: zep/graphiti-server:0.3
+    container_name: memrag-graphiti-server
+    profiles: ["graphiti"]
+    environment:
+      OPENAI_BASE_URL: http://ollama:11434
+      OPENAI_MODEL: ${OLLAMA_CHAT_MODEL:-gemma4:12b}
+      NEO4J_URI: ${NEO4J_URI:-bolt://neo4j:7687}
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-memrag-neo4j}
+    ports:
+      - "8100:8100"
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/8100' 2>/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - memrag-network
+
+  graphiti-mcp:
+    image: zep/graphiti-mcp:0.3
+    container_name: memrag-graphiti-mcp
+    profiles: ["graphiti"]
+    environment:
+      GRAPHITI_SERVER_URL: ${GRAPHITI_SERVER_URL:-http://graphiti-server:8100}
+    ports:
+      - "8101:8101"
+    depends_on:
+      graphiti-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/8101' 2>/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - memrag-network
+
 volumes:
   postgres_data:
   redis_data:
@@ -324,6 +432,7 @@ volumes:
   minio_data:
   ollama_data:
   prometheus_data:
+  neo4j_data:
 
 networks:
   memrag-network:

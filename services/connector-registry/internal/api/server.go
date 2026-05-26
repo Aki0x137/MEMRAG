@@ -32,6 +32,8 @@ func NewRouter(tc *temporal.TemporalClient, queries db.Queries) *chi.Mux {
 		r.Patch("/{id}", PatchConnector(queries))
 		r.Delete("/{id}", DeleteConnector(queries))
 		r.Get("/{id}/status", GetConnectorStatus(queries))
+		r.Post("/{id}/grants", CreateGrant(queries))
+		r.Delete("/{id}/grants/{grant_id}", DeleteGrant(queries))
 	})
 
 	return r

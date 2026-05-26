@@ -28,6 +28,10 @@ class AgentWorkflow:
         agent_id = params["agent_id"]
         prompt = params.get("prompt", "")
         manifest = params.get("manifest") or {}
+        explicit_mcp_servers = list(manifest.get("mcp_servers") or [])
+        tool_context = {
+            "mcp_servers": explicit_mcp_servers,
+        }
 
         existing_turns = await workflow.execute_activity(
             "fetch_recent_session",
@@ -115,6 +119,7 @@ class AgentWorkflow:
             "workspace_id": workspace_id,
             "session_id": session_id,
             "agent_id": agent_id,
+            "tool_context": tool_context,
             "recovered_turn_count": len(existing_turns),
             "recalled_memories": [memory.text for memory in recalled_memories],
             "shared_memories": [memory.text for memory in shared_memories],

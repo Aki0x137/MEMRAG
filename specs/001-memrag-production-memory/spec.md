@@ -59,7 +59,7 @@ silently deduplicated — the memory store does not grow unboundedly with redund
 **Why this priority**: Long-term per-agent memory is the core differentiator of the MEMRAG
 platform. It must work reliably before cross-agent or org-wide features are layered on top.
 
-**Independent Test**: Compose services `qdrant`, `agent-workers`, `llm-gateway` started.
+**Independent Test**: Compose services `qdrant`, `agent-workers`, `ollama` started.
 Agent `db-triage` runs a workflow, produces a finding, then runs a second workflow with a
 related prompt. The second run's context contains the finding from the first run, sourced from
 the vector store. Proves value independently of cross-agent sharing or BYOD.
@@ -101,7 +101,7 @@ its context, avoids redundant investigation, and includes the prior finding in i
 **Why this priority**: Cross-agent sharing multiplies the value of individual agent runs.
 It requires both L1 (session) and L2 (per-agent) to be stable, so it comes after P1 stories.
 
-**Independent Test**: Compose services `qdrant`, `agent-workers`, `llm-gateway` started.
+**Independent Test**: Compose services `qdrant`, `agent-workers`, `ollama` started.
 Agent A promotes a finding tagged with a known keyword. Agent B is launched with a query
 containing that keyword. Agent B's context includes the promoted finding from Agent A even
 though they share no session history. Validates independently of BYOD.
@@ -139,7 +139,7 @@ incremental re-ingestion automatically so the index stays fresh.
 It depends on P1/P2 memory infrastructure being stable.
 
 **Independent Test**: Compose services `connector-registry`, `knowledge-ingestion`,
-`qdrant`, `temporal`, `llm-gateway`, `github-api-mock` started. The mock GitHub service
+`qdrant`, `temporal`, `ollama`, `github-api-mock` started. The mock GitHub service
 implements the exact GitHub tree and contents API contracts and can simulate push webhook
 events locally — no public IP or external GitHub access is required. A GitHub connector is
 configured pointing at the mock. An ingestion workflow runs, chunks are written to Qdrant.
@@ -282,7 +282,7 @@ a single coherent system prompt with citations for org knowledge chunks.
 **Why this priority**: Full context hydration requires all four layers to be independently
 functional first (P1, P2, P3 stories above). This story validates the integrated assembly.
 
-**Independent Test**: Compose services `redis`, `qdrant`, `agent-workers`, `llm-gateway`,
+**Independent Test**: Compose services `redis`, `qdrant`, `agent-workers`, `ollama`,
 `context-hydrator`, `temporal` all started. An agent with past personal memories, access to
 a workspace with shared memories, and at least one connected org knowledge source is launched.
 Inspect the assembled system prompt and verify chunks from all four layers are present, ranked,
@@ -309,6 +309,100 @@ and within the configured token budget.
 5. **Given** one of the three non-session recall activities times out or fails, **When** the
    hydrator assembles context, **Then** it proceeds with the available layers rather than
    failing the entire workflow — the failed layer is noted in structured logs.
+
+---
+
+### User Story 8 — Graph-Aware Shared Memory with Temporal Validity (Priority: P3)
+
+Agents investigating a recurring incident promote findings to the shared workspace over
+multiple sessions. When a later agent discovers that a prior finding was incorrect — for
+example, the root cause was a different service than first believed — the contradiction is
+recorded in the temporal knowledge graph: the old fact is **invalidated** with a `t_invalid`
+timestamp rather than deleted, and the new finding becomes the current belief. Any agent
+querying shared memory can traverse causal chains (e.g., "which findings led to this root
+cause?"), retrieve provenance ("what did agents believe about prod-rds-01 before the
+incident?"), and is never silently served a stale overwritten fact.
+
+**Why this priority**: Graph-aware shared memory is the most powerful form of Layer 3 — it
+multiplies the value of cross-agent collaboration by preserving the full belief history and
+enabling relationship traversal. The full end-to-end capability requires US3 (shared memory)
+and US7 (full hydration) to be complete first, but the Graphiti foundation work (Compose
+profile, adapters, `memory-api`) can be built earlier in parallel once US3 exists.
+
+**Independent Test**: Compose services `graphiti-server`, `neo4j`, `agent-workers`,
+`temporal` started (with `GRAPHITI_ENABLED=true`). Agent A promotes Finding X to the graph.
+Agent B promotes Finding Y that contradicts Finding X (same entity, different conclusion).
+Assert the graph has two edges for the same entity: one with `t_invalid` set (old belief,
+Agent A) and one as the current active edge (Agent B). Assert that a graph traversal from
+Finding Y surfaces Finding X as its predecessor with provenance metadata. Assert agents
+with `GRAPHITI_ENABLED=false` continue to use Qdrant L3 path unchanged.
+
+**Acceptance Scenarios**:
+
+1. **Given** `GRAPHITI_ENABLED=true` and an agent promotes a finding, **When** the promotion
+   activity runs, **Then** the finding is ingested via Graphiti `add_episode`: entities and
+   relationships are extracted, a temporal edge is created with `t_valid` set to the current
+   time, and the episode is queryable immediately by other agents.
+
+2. **Given** a finding already exists in the graph, **When** a new finding contradicts it
+   (same entity, conflicting claim), **Then** the original edge is marked with `t_invalid`
+   and the new finding becomes the active belief — both are preserved for provenance queries.
+
+3. **Given** an agent needs to understand a causal chain, **When** it calls `search_facts`
+   via the Graphiti MCP tool, **Then** the returned result set includes connected findings
+   traversed by graph edges (not just semantically similar flat vectors).
+
+4. **Given** an agent manifest includes `"graphiti-mcp"` in its `mcp_servers` list and an
+  external `mcp-registry` service from the enterprise-agentic-platform deployment has been
+  configured with the Graphiti MCP server, **When** the AgentWorkflow initialises its tool
+  context by reading `manifest.mcp_servers`, **Then** the tools `add_episode`,
+  `search_facts`, `get_entity`, and `get_related_entities` are available to the agent's
+  reasoning loop.
+
+5. **Given** `GRAPHITI_ENABLED=false`, **When** an agent workflow runs, **Then** Layer 3
+   recall falls back to the existing Qdrant `shared_memories` path with zero code change
+   and zero impact on p95 latency.
+
+---
+
+### User Story 9 — Enterprise Memory Layer Compatibility API (Priority: P3)
+
+A team running the enterprise-agentic-platform wants to replace its flat `agent_memories`
+pgvector table with MEMRAG's superior multi-layer memory. They update two functions in
+`activities_memory.py`: `recall_memories()` becomes an HTTP call to
+`POST /api/v1/memories/search`, and `store_memory()` becomes `POST /api/v1/memories`.
+No other enterprise code changes. Agents in the enterprise platform immediately gain L2
+hybrid recall, L3 shared memory, decay scoring, and deduplication without rebuilding their
+workflow layer.
+
+**Why this priority**: MEMRAG's memory layer is strictly superior to the enterprise flat
+pgvector store. Providing a thin compatibility REST API removes the only barrier to adoption
+— the need to refactor enterprise activity code. It requires all lower-layer memory features
+(US1–US3) to be stable first.
+
+**Independent Test**: Compose services `memory-api`, `qdrant`, `agent-workers`, `redis`,
+`temporal` started. Call `POST /api/v1/memories` to store a fact. Call
+`POST /api/v1/memories/search` with a semantically related query. Assert the response
+is a `list[str]` (identical contract to enterprise `activities_memory.py`). Assert
+`X-Workspace-ID` and `X-Agent-ID` headers enforce tenant and agent scoping.
+
+**Acceptance Scenarios**:
+
+1. **Given** a caller sends `POST /api/v1/memories` with `{agent_id, content, metadata}` and
+  `X-Workspace-ID` plus `X-Agent-ID` headers, **When** the request is processed, **Then** the fact is stored
+   via `mem0_client.extract_and_store` in the appropriate `agent_memories` collection and
+   `200 OK` is returned; calling again with identical content returns `200 OK` without
+   creating a duplicate (dedup applied).
+
+2. **Given** a caller sends `POST /api/v1/memories/search` with `{query, agent_id, limit}`
+  and `X-Workspace-ID` plus `X-Agent-ID` headers, **When** the request is processed, **Then** the response
+   body is a JSON `list[str]` of the top-K most relevant memory strings — the same contract
+   as the enterprise `recall_memories()` function.
+
+3. **Given** memories have been stored for workspace A under agent `db-triage`, **When** a
+  search is performed with workspace B's `X-Workspace-ID` header, the same `agent_id`, and
+  an `X-Agent-ID` header for that agent, **Then** the response is an empty list — workspace A memories are never visible to
+   workspace B callers.
 
 ---
 
@@ -518,6 +612,35 @@ and within the configured token budget.
   resume or cancel a halted `pii_detected_mismatch` ingestion workflow. This API is required
   to fulfil the HITL signal flow in FR-030. The UI/frontend for this API remains out of scope.
 
+#### Graphiti Temporal Knowledge Graph (Layer 3 Upgrade)
+
+- **FR-033**: When `GRAPHITI_ENABLED=true`, Layer 3 shared memory MUST be backed by Graphiti
+  (temporal knowledge graph engine, backed by Neo4j). Every promoted finding MUST be ingested
+  via Graphiti's `add_episode` API, which extracts entities and relationships using the
+  configured LLM and assigns a `t_valid` timestamp. When a new finding contradicts an existing
+  fact about the same entity, the old graph edge MUST be assigned a `t_invalid` timestamp
+  rather than overwritten or deleted, preserving the full belief history.
+
+- **FR-034**: When `GRAPHITI_ENABLED=true`, agents MUST be able to access Graphiti's MCP
+  tools (`add_episode`, `search_facts`, `get_entity`, `get_related_entities`) by including
+  `"graphiti-mcp"` in their `AgentManifest.mcp_servers` list. These tools MUST be served by
+  Graphiti's native MCP server (`graphiti-mcp` Compose service) and MAY be surfaced through
+  an external `mcp-registry` service supplied by the enterprise-agentic-platform deployment.
+  MEMRAG itself does not implement `mcp-registry`. No new Temporal activities are required to
+  expose these tools beyond reading `manifest.mcp_servers` during workflow tool-context
+  initialisation.
+
+- **FR-035**: The platform MUST expose an enterprise memory compatibility REST API at
+  `POST /api/v1/memories` (store a fact) and `POST /api/v1/memories/search` (recall top-K
+  facts). Both endpoints MUST accept `X-Workspace-ID` and `X-Agent-ID` headers for
+  multi-tenant isolation. The response contract for `/search` MUST be a JSON `list[str]`,
+  identical to the enterprise `activities_memory.py` `recall_memories()` return type.
+
+- **FR-036**: All Graphiti-specific behaviour (FR-033, FR-034) MUST be gated behind the
+  `GRAPHITI_ENABLED=true` environment variable. When `GRAPHITI_ENABLED` is absent or `false`,
+  Layer 3 MUST fall back to the existing Qdrant `shared_memories` path with no regression in
+  functionality or latency.
+
 ### Key Entities
 
 - **AgentMemory**: A single atomic fact stored per agent. Has type (episodic/semantic),
@@ -545,8 +668,19 @@ and within the configured token budget.
   PII values.
 
 - **AgentManifest** (extended): The per-agent configuration object extended to include
-  knowledge source filter, top-K override, context token budget, auto-promotion flag, and
-  agent domain (code / ops / policy / data).
+  knowledge source filter, top-K override, context token budget, auto-promotion flag, agent
+  domain (code / ops / policy / data), and optional `mcp_servers: list[str]` field for
+  registering graph-aware tools (e.g., `"graphiti-mcp"`).
+
+- **GraphitiEpisode**: A finding ingested into the Graphiti temporal KG. Contains the raw
+  episode text, extracted entity nodes, typed relationship edges, and temporal metadata
+  (`t_valid`, optional `t_invalid`). Scoped to a workspace via a `group_id` field passed
+  to the Graphiti API.
+
+- **MemoryAPIRequest**: The JSON body accepted by the enterprise compatibility endpoints:
+  `POST /api/v1/memories` accepts `{agent_id, content, metadata?}`;
+  `POST /api/v1/memories/search` accepts `{query, agent_id, limit?}`. Both require
+  `X-Workspace-ID` and `X-Agent-ID` headers. The `/search` response is `list[str]`.
 
 ---
 
@@ -609,6 +743,17 @@ and within the configured token budget.
   query result from workspace B agents — validated across 1,000 random cross-workspace query
   pairs in the test suite.
 
+- **SC-011**: When `GRAPHITI_ENABLED=true`, a graph traversal from a seed finding returns a
+  causal chain of ≥ 3 connected findings in under 1 second (p95), measured from when
+  `search_facts` is called to when the result set is returned. Validated with a Neo4j local
+  deployment seeded with a synthetic 50-node graph.
+
+- **SC-012**: The enterprise memory compatibility API (`/api/v1/memories` and
+  `/api/v1/memories/search`) accepts and returns the identical JSON contract as the
+  enterprise `activities_memory.py` `store_memory()` and `recall_memories()` functions, such
+  that replacing those functions with HTTP calls requires zero changes to enterprise caller
+  business logic.
+
 ---
 
 ## Assumptions
@@ -623,23 +768,33 @@ and within the configured token budget.
   secret references per environment, never hardcoded in source, specs, or Compose files.
 
 - **A-002**: All LLM inference (embedding generation, memory extraction LLM, agent reasoning
-  LLM) runs through a local LLM gateway backed by Ollama-served models. No external cloud
-  LLM APIs are required for local operation.
+  LLM) runs through the local Ollama runtime exposed at `OLLAMA_HOST`. No separate LLM
+  gateway or external cloud LLM APIs are required for local operation.
 
 - **A-003**: Temporal is the workflow orchestration layer for both agent execution
   (AgentWorkflow) and knowledge ingestion (IngestionWorkflow). No other orchestration
   framework is used.
 
-- **A-004**: Qdrant is the sole vector store. Three collections are used: `agent_memories`
-  (per-agent long-term), `shared_memories` (cross-agent workspace), `org_knowledge` (BYOD).
-  PostgreSQL with pgvector is retained for non-vector relational data (workflow events, cost
-  tracking, connector registry, PII audit log).
+- **A-004**: Qdrant is the primary vector store. Three collections are used: `agent_memories`
+  (per-agent long-term, L2), `shared_memories` (cross-agent workspace, L3 Qdrant path),
+  `org_knowledge` (BYOD, L4). When `GRAPHITI_ENABLED=true`, L3 shared findings are stored in
+  Graphiti (Neo4j-backed) instead of `shared_memories`. L2 and L4 always remain on Qdrant
+  regardless of `GRAPHITI_ENABLED`: L2 (per-agent facts) requires fast high-throughput vector
+  queries at millions-of-entry scale with decay scoring; L4 (BYOD chunks) requires bulk
+  ingestion at connector scale and is content-only (no graph topology needed). PostgreSQL with
+  pgvector is retained for non-vector relational data (workflow events, cost tracking,
+  connector registry, PII audit log).
 
 - **A-005**: Mem0 SDK wraps per-agent memory **store** and LLM-based fact extraction for
   Layer 2. **Recall** for Layer 2 bypasses Mem0 and uses direct Qdrant queries with a custom
   hybrid search implementation (dense embedding + sparse BM25 vectors, fused via RRF),
   enabling FR-004 hybrid search while preserving Mem0's extraction and deduplication logic.
-  Layers 3 and 4 use direct Qdrant queries with custom filter and hybrid search logic.
+  Layer 4 uses direct Qdrant queries with custom filter and hybrid search logic. Layer 3
+  recall uses Qdrant `shared_memories` when `GRAPHITI_ENABLED=false` and Graphiti `search_facts`
+  (Neo4j vector index + BM25 full-text + graph traversal, fused by Graphiti) when
+  `GRAPHITI_ENABLED=true`. The three-signal fusion in Graphiti (semantic + keyword + graph
+  proximity) is strictly richer than RRF for L3 — L4 stays on Qdrant because graph topology
+  is irrelevant for bulk document chunk retrieval.
 
 - **A-006**: Redis serves as the in-session hot buffer (Layer 1) with 24-hour TTL. No
   alternative key-value store is considered.
@@ -653,8 +808,15 @@ and within the configured token budget.
   persisting static passwords. Secrets Manager references and IAM-auth generation inputs are
   treated as connector configuration, not operator-entered secrets in the codebase.
 
-- **A-008**: Graphiti temporal knowledge graph (for relationship-aware cross-agent memory) is
-  explicitly deferred to a future phase. This spec does not include Graphiti.
+- **A-008**: Graphiti temporal knowledge graph is implemented as an optional Layer 3 backend
+  across Phase 6 (foundation: Compose profile, adapters, `memory-api`) and Phase 11
+  (workflow integration + end-to-end validation), gated by `GRAPHITI_ENABLED=true`.
+  Graphiti (Apache 2.0, zep/graphiti) provides
+  temporal validity windows (`t_valid`/`t_invalid`) on edges, LLM-based entity extraction,
+  conflict resolution, and hybrid retrieval (semantic + BM25 + graph traversal). It runs as
+  two Compose services under the `graphiti` profile: `graphiti-server` (port 8100, backed by
+  `neo4j:5.20`) and `graphiti-mcp` (port 8101, Graphiti's native MCP server). When
+  `GRAPHITI_ENABLED=false` (default), the existing Qdrant L3 path is used unchanged.
 
 - **A-009**: The Slack connector indexes messages from admin-configured channels that are at
   least 7 days old at the time of sync. There is no maximum age ceiling — all messages older
@@ -731,8 +893,6 @@ and within the configured token budget.
 
 ## Out of Scope
 
-- Graphiti temporal knowledge graph integration (see Section 9 of architecture doc — explicitly
-  deferred).
 - Snowflake, BigQuery, SharePoint, Notion, or other BYOD connector types beyond the initial
   four (GitHub, Confluence, Slack, RDS schema).
 - Real-time Slack message ingestion (messages < 7 days old are never indexed by the ingestion
@@ -762,3 +922,9 @@ and within the configured token budget.
 - Q: SC-004 "one workflow round-trip" not a wall-clock bound — how to test? → A: Async integration tests; Agent A promotion awaited to completion, Agent B workflow started, context polled for finding (up to 5-second timeout).
 - Q: Tombstone threshold + archival mechanism undefined (A-012) → A: Archive to S3 Apache Iceberg (`s3://memrag-archive/memory-tombstones/`) before deletion from Qdrant; threshold = decay score < 0.1.
 - Q: Token budget Layer 1 session turns have no score; FR-027 trim ordering undefined → A: Session turns exempt from score-based trimming (oldest removed first if over budget); scored chunks from L2/L3/L4 fill remaining budget; weight matrix derived from §4.6 of architecture doc with `data` domain and `slack` source type added.
+
+### Session 2026-05-25
+
+- Q: Why not put both L3 and L4 on Neo4j/Graphiti? → A: L4 is bulk document chunks (potentially millions per connector); Graphiti runs LLM entity extraction per ingested episode — applying that to every code file in a GitHub repo would be prohibitively expensive. L4 retrieval is pure "find similar chunks" (dense+BM25 RRF); no graph topology is needed because relationships between raw document fragments do not carry meaning. L3 (synthesised agent findings) is where graph topology matters: findings have causal relationships, contradictions, and provenance chains. L2 stays Qdrant for the same scale/throughput reasons as L4, plus decay scoring is natively expressed as Qdrant payload filters.
+- Q: How does semantic search work on Neo4j? → A: Neo4j 5.x has a native vector index (`CREATE VECTOR INDEX`) used by Graphiti for embedding similarity search. Graphiti's `search_facts` fuses three signals: (1) Neo4j vector index ANN for semantic similarity, (2) Neo4j full-text index for BM25 keyword matching, (3) graph traversal distance from the top semantic hits. This three-signal fusion is richer than Qdrant RRF for L3 use cases where causal chains matter. For L4's bulk retrieval workload, Qdrant's HNSW remains faster and more cost-efficient.
+- Q: Why use Graphiti instead of building a custom KG service similar to the enterprise `kg-service`? → A: The enterprise `kg-service` is a manually-built subset of Graphiti (LLM extraction + pgvector graph), lacking temporal validity, conflict resolution, and MCP-native integration. Replicating it in MEMRAG yields an inferior version of something Graphiti already provides under Apache 2.0. Graphiti's native MCP server can plug into the external `mcp-registry` already shipped by the enterprise-agentic-platform deployment with zero new Temporal activities in MEMRAG.

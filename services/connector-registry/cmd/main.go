@@ -33,4 +33,3 @@ func main() {
 		fmt.Printf("Server error: %v\n", err)
 	}
 }
-

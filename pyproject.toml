@@ -12,6 +12,7 @@ members = [
     "services/agent-workers",
     "services/knowledge-ingestion",
     "services/context-hydrator",
+    "services/memory-api",
 ]
 
 [tool.uv.sources]

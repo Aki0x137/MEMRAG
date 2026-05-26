@@ -51,7 +51,7 @@ class OllamaClient:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
-        model: str = "llama3.1:8b",
+        model: str = "gemma4:12b",
     ) -> str:
         payload: dict[str, Any] = {"model": model, "messages": messages, "stream": False}
         if tools:
@@ -68,7 +68,7 @@ class OllamaClient:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
-        model: str = "llama3.1:8b",
+        model: str = "gemma4:12b",
     ) -> tuple[str, list[ToolCall]]:
         payload: dict[str, Any] = {"model": model, "messages": messages, "stream": False}
         if tools:

@@ -2,11 +2,57 @@
 
 from __future__ import annotations
 
+import importlib
 from datetime import timedelta
 from typing import Any
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
+
+
+async def process_ingestion_batch(
+    activity_runner,
+    params: dict[str, Any],
+    *,
+    wait_for_hitl=None,
+) -> dict[str, Any]:
+    """Thin async helper that wraps the pii_screen activity call with HITL resume logic.
+
+    Used in integration tests to verify the HITL halt-and-approve/abort path without
+    running a full Temporal worker.  The *activity_runner* callable has the same
+    signature as ``workflow.execute_activity``:
+        await activity_runner(activity_fn, *, args, start_to_close_timeout)
+    """
+    pii_screen_fn = importlib.import_module("activities.pii_screen").pii_screen
+    PIIDetectedMismatchError = importlib.import_module("pii").PIIDetectedMismatchError
+
+    chunks = params["chunks"]
+    connector_id = params["connector_id"]
+    workspace_id = params["workspace_id"]
+    contains_pii = params.get("contains_pii", False)
+    pii_config = params.get("pii_config", {})
+
+    try:
+        screened = await activity_runner(
+            pii_screen_fn,
+            args=[chunks, connector_id, workspace_id, pii_config, contains_pii],
+            start_to_close_timeout=timedelta(minutes=5),
+        )
+    except PIIDetectedMismatchError:
+        if wait_for_hitl is None:
+            return {"status": "aborted", "reason": "pii_detected_mismatch"}
+        hitl_response = await wait_for_hitl()
+        if hitl_response.get("action") == "abort":
+            return {"status": "aborted", "reason": "pii_detected_mismatch"}
+        # Retry with contains_pii=True after HITL approval
+        screened = await activity_runner(
+            pii_screen_fn,
+            args=[chunks, connector_id, workspace_id, pii_config, True],
+            start_to_close_timeout=timedelta(minutes=5),
+        )
+        return {"status": "ok", "chunks": screened, "resumed": True}
+
+    return {"status": "ok", "chunks": screened, "resumed": False}
 
 
 @workflow.defn
