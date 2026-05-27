@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "memrag-github-api-mock"
+version = "0.1.0"
+description = "GitHub API mock service for testing MEMRAG connectors"
+readme = "README.md"
+requires-python = ">=3.11"
+
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]

@@ -13,11 +13,11 @@ ENV PATH="/root/.local/bin:$PATH"
 # Copy project files
 COPY . .
 
-# Install dependencies with uv from workspace root
-RUN uv sync --frozen --all-extras
+# Install the full workspace so service tests can import all runtime deps
+RUN uv sync --frozen --all-packages --all-extras
 
 # Install pytest and asyncio plugin
 RUN uv pip install pytest pytest-asyncio
 
-# Run tests from the workspace using uv run
-CMD ["uv", "run", "--package", "memrag-agent-workers", "pytest", "services/agent-workers/tests/", "-v", "--tb=short"]
+# Run tests from the workspace venv by default
+CMD ["/app/.venv/bin/pytest", "tests/", "services/memory-api/tests/", "services/knowledge-ingestion/tests/", "-v", "--tb=short"]

@@ -16,6 +16,10 @@ authors = [
 dependencies = [
     "boto3>=1.34.0",
     "botocore>=1.34.0",
+    "redis>=5.0.0",
+    "qdrant-client>=1.7.0",
+    "httpx>=0.27.0",
+    "psycopg2-binary>=2.9.0",
 ]
 
 [project.optional-dependencies]

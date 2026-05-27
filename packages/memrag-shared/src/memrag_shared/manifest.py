@@ -28,4 +28,5 @@ class AgentManifest:
     promote_to_shared: bool = False
     knowledge_source_filter: list[str] = field(default_factory=list)
     agent_tags: list[str] = field(default_factory=list)
+    mcp_servers: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
