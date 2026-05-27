@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"memrag/connector-registry/internal/db"
 	"memrag/connector-registry/internal/temporal"
@@ -23,6 +24,7 @@ func NewRouter(tc *temporal.TemporalClient, queries db.Queries) *chi.Mux {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"status":"ok"}`)
 	})
+	r.Handle("/metrics", promhttp.Handler())
 
 	// Connector management API v1
 	r.Route("/v1/connectors", func(r chi.Router) {

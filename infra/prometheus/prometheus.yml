@@ -3,19 +3,14 @@ global:
   evaluation_interval: 15s
 
 scrape_configs:
-  - job_name: 'agent-workers'
+  - job_name: 'memory-api'
     static_configs:
-      - targets: ['agent-workers:8080']
-    metrics_path: '/metrics'
-
-  - job_name: 'context-hydrator'
-    static_configs:
-      - targets: ['context-hydrator:8081']
+      - targets: ['memory-api:8083']
     metrics_path: '/metrics'
 
   - job_name: 'knowledge-ingestion'
     static_configs:
-      - targets: ['knowledge-ingestion:8083']
+      - targets: ['knowledge-ingestion:8080']
     metrics_path: '/metrics'
 
   - job_name: 'connector-registry'

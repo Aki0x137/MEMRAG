@@ -18,8 +18,8 @@ COPY . .
 # Sync dependencies using uv workspace
 RUN uv sync --frozen --all-packages
 
-# Expose API port
-EXPOSE 8083
+# Expose Prometheus metrics port
+EXPOSE 8080
 
 # Run via uv
 CMD ["uv", "run", "--package", "memrag-knowledge-ingestion", "python", "-m", "worker"]

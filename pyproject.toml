@@ -9,10 +9,13 @@ dependencies = []
 [tool.uv.workspace]
 members = [
     "packages/memrag-shared",
-    "services/agent-workers",
     "services/knowledge-ingestion",
-    "services/context-hydrator",
     "services/memory-api",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "benchmark: performance benchmarks that require a live stack",
 ]
 
 [tool.uv.sources]

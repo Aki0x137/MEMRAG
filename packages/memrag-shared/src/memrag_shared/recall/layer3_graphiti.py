@@ -37,7 +37,7 @@ async def recall_shared_graphiti(
             is responsible for deciding whether to fall back or propagate.
     """
     server_url = os.getenv(
-        "GRAPHITI_SERVER_URL", "http://graphiti-server:8100"
+        "GRAPHITI_SERVER_URL", "http://graphiti-server:8000"
     ).rstrip("/")
     url = f"{server_url}/search/facts"
     params = {

@@ -1,20 +1,47 @@
-# Test Compose file inherits base Compose and overrides for testing
-# Override with: docker compose -f docker-compose.yml -f docker-compose.test.yml up
+# Standalone test Compose file.
+# It extends docker-compose.yml so the exact task checkpoint command works:
+# docker compose -f docker-compose.test.yml up --exit-code-from app --abort-on-container-exit
 
 services:
-  # Override existing services for test environment
-  agent-workers:
-    environment:
-      ENVIRONMENT: test
-      GITHUB_API_BASE_URL: http://github-api-mock:8085
-      CONFLUENCE_BASE_URL: http://confluence-api-mock:8084
-      SLACK_API_BASE_URL: http://slack-api-mock:8086
+  postgres:
+    extends:
+      file: docker-compose.yml
+      service: postgres
 
-  context-hydrator:
-    environment:
-      ENVIRONMENT: test
+  redis:
+    extends:
+      file: docker-compose.yml
+      service: redis
+
+  qdrant:
+    extends:
+      file: docker-compose.yml
+      service: qdrant
+
+  temporal:
+    extends:
+      file: docker-compose.yml
+      service: temporal
+
+  minio:
+    extends:
+      file: docker-compose.yml
+      service: minio
+
+  ollama:
+    extends:
+      file: docker-compose.yml
+      service: ollama
+
+  prometheus:
+    extends:
+      file: docker-compose.yml
+      service: prometheus
 
   knowledge-ingestion:
+    extends:
+      file: docker-compose.yml
+      service: knowledge-ingestion
     environment:
       ENVIRONMENT: test
       GITHUB_API_BASE_URL: http://github-api-mock:8085
@@ -22,26 +49,41 @@ services:
       SLACK_API_BASE_URL: http://slack-api-mock:8086
 
   connector-registry:
+    extends:
+      file: docker-compose.yml
+      service: connector-registry
     environment:
       ENVIRONMENT: test
 
   memory-api:
+    extends:
+      file: docker-compose.yml
+      service: memory-api
     environment:
       ENVIRONMENT: test
       GRAPHITI_ENABLED: ${GRAPHITI_ENABLED:-false}
-      GRAPHITI_SERVER_URL: http://graphiti-server:8100
+      GRAPHITI_SERVER_URL: http://graphiti-server:8000
 
   # Graphiti services (profile=graphiti) — included when running
   # docker compose -f docker-compose.yml -f docker-compose.test.yml --profile graphiti up -d
   neo4j:
+    extends:
+      file: docker-compose.yml
+      service: neo4j
     profiles: ["graphiti"]
 
   graphiti-server:
+    extends:
+      file: docker-compose.yml
+      service: graphiti-server
     profiles: ["graphiti"]
     environment:
       ENVIRONMENT: test
 
   graphiti-mcp:
+    extends:
+      file: docker-compose.yml
+      service: graphiti-mcp
     profiles: ["graphiti"]
 
   # Test-only Mock Services
@@ -85,19 +127,54 @@ services:
       context: .
       dockerfile: Dockerfile.test
     container_name: memrag-test-runner
+    gpus: all
     environment:
       ENVIRONMENT: test
       GITHUB_API_BASE_URL: http://github-api-mock:8085
       CONFLUENCE_BASE_URL: http://confluence-api-mock:8084
+      MEMORY_API_BASE_URL: http://memory-api:8083
+      CONNECTOR_REGISTRY_URL: http://connector-registry:8082
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
     depends_on:
-      - agent-workers
-      - context-hydrator
-      - knowledge-ingestion
-      - connector-registry
-      - memory-api
-      - github-api-mock
-      - confluence-api-mock
-    command: pytest tests/ services/memory-api/tests/ -v --tb=short
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      connector-registry:
+        condition: service_healthy
+      memory-api:
+        condition: service_healthy
+      github-api-mock:
+        condition: service_healthy
+      confluence-api-mock:
+        condition: service_healthy
+    command: >
+      /app/.venv/bin/pytest tests/ services/memory-api/tests/ services/knowledge-ingestion/tests/
+      services/memory-api/tests/integration/test_graphiti_kg.py
+      services/memory-api/tests/integration/test_enterprise_compat_api.py
+      -v --tb=short
     networks:
       - memrag-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  qdrant_data:
+  minio_data:
+  ollama_data:
+  prometheus_data:
+  neo4j_data:
+
+networks:
+  memrag-network:
+    driver: bridge
 

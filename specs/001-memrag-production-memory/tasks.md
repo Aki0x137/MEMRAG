@@ -250,7 +250,7 @@ docker compose exec memory-api pytest tests/integration/test_context_hydration.p
 - [X] T071 [US7] Add `prometheus_client` histograms to `memory-api`: `context_hydration_assembly_ms` (labels: `workspace_id`, `domain`); `context_hydration_chunks_dropped_total` (labels: `workspace_id`, `layer`); `memory_recall_latency_seconds` per layer (labels: `layer`, `workspace_id`); expose via `GET /metrics` on `memory-api` port 8083; add `prometheus-client` to `services/memory-api/pyproject.toml`.
 - [X] T072 [US7] Add `POST /api/v1/hydrate` endpoint to `services/memory-api/src/main.py` (or `routes/hydrate.py`): accepts `HydrateRequest` JSON; uses `asyncio.gather` for parallel L1–L4 recall with per-layer error catching recording to `failed_layers`; calls `memrag-shared.assembler.assemble()`; records `context_hydration_assembly_ms` histogram observation; returns `HydrateResponse` JSON. Replaces the separate `context-hydrator` service entirely.
 - [X] T073 [US7] Implement the parallel recall fan-out inside `memory-api`'s `/api/v1/hydrate` handler using `asyncio.gather(*[recall_session(), recall_agent_memory(), recall_shared_memory(), recall_org_knowledge()])`, with per-coroutine exception catching; failed coroutines record their layer name to `failed_layers`; all successful results forwarded to `assembler.assemble()`. No Temporal parallel activities — plain Python async concurrency is sufficient.
-- [ ] T074 [US7] Add `memory_recall_latency_seconds` Prometheus histogram (labels: `layer`, `workspace_id`) instrumentation in each `memrag-shared` recall module (`layer2.py`, `layer3.py`, `layer4.py`, `session.py`); each function measures its own wall time and records to the shared `prometheus-client` instance; histograms scraped from `memory-api`'s `/metrics` endpoint.
+- [X] T074 [US7] Add `memory_recall_latency_seconds` Prometheus histogram (labels: `layer`, `workspace_id`) instrumentation in each `memrag-shared` recall module (`layer2.py`, `layer3.py`, `layer4.py`, `session.py`); each function measures its own wall time and records to the shared `prometheus-client` instance; histograms scraped from `memory-api`'s `/metrics` endpoint.
 - [X] T075 [US7] Create `services/memory-api/tests/integration/test_context_hydration.py`: seeds Layer 1 turns in Redis; seeds Layer 2 facts in `agent_memories` Qdrant; seeds Layer 3 finding in `shared_memories`; seeds Layer 4 chunk in `org_knowledge`; calls `POST /api/v1/hydrate`; asserts `HydrateResponse.system_prompt` contains content from all four layers; asserts `token_count` ≤ configured budget; asserts `citations` present for Layer 4 chunk; re-runs with Layer 3 Qdrant unreachable (mock partition); asserts response has `failed_layers=["layer3"]` and non-empty `system_prompt`.
 
 **Checkpoint**: `docker compose exec memory-api pytest tests/integration/test_context_hydration.py` passes. `POST /api/v1/hydrate` functional: all four layers hydrate in parallel; budget enforced; one layer failure returns `failed_layers` without aborting the response.
@@ -288,13 +288,13 @@ docker compose exec memory-api pytest tests/integration/test_enterprise_compat_a
 
 **Purpose**: Full integration test suite, Prometheus scrape config, `.env.example` completeness, and quickstart validation.
 
-- [ ] T076 [P] Create `infra/prometheus/prometheus.yml` scrape config: targets for `memory-api:8083/metrics`, `knowledge-ingestion:8080/metrics`, `connector-registry:8082/metrics`; scrape interval 15s; add to `prometheus` Compose service as mounted volume. (`agent-workers` and `context-hydrator` are eliminated; all application memory metrics now scraped from `memory-api`.)
-- [ ] T077 [P] Create `tests/e2e/test_independent_suites_idempotent.py`: runs all independent test suites from Phases 3–11 that declare one in sequence with fresh `docker compose` stack between runs; verifies each phase test passes idempotently with no cross-test data leakage (confirms phase isolation assumption)
-- [ ] T078 Complete `docker-compose.test.yml`: add `github-api-mock` (from `tests/mocks/github-api-mock/`) and `confluence-api-mock` (from `tests/mocks/confluence-api-mock/`) services; override `GITHUB_API_BASE_URL`, `CONFLUENCE_BASE_URL`, `SLACK_API_BASE_URL` env vars on `knowledge-ingestion` to point at mocks; set `ENVIRONMENT=test` on all application services; add `app` service that runs `pytest tests/` and exits
-- [ ] T079 Create end-to-end integration test `tests/e2e/test_full_stack.py` that validates: (a) connector create → ingest → recall chain via `POST /api/v1/knowledge/search`; (b) PII detection halt + HITL approve; (c) scope change propagates within 60s via `POST /api/v1/knowledge/search`; (d) full four-layer hydration via `POST /api/v1/hydrate` with all layers populated; (e) MCP tool call via `POST /mcp` for `store_memory` and subsequent REST retrieval via `POST /api/v1/memories/search`; run via `docker compose -f docker-compose.test.yml up --exit-code-from app`
-- [ ] T080 [P] Define and document both: (a) p95 baseline for `memory_recall_latency_seconds` under synthetic 1,000-entry memory store with concurrent 10-agent recall load; and (b) BYOD ingestion throughput baseline for SC-005 (`1,000`-file GitHub full sync under 10 minutes; `10`-file delta sync under 90 seconds on a GPU-resident host). Record both as performance benchmark fixtures for regression testing.
-- [ ] T081 [P] Verify `.env.example` has entries for every env var referenced across all service code; fill in any gaps discovered during T078–T080, including AWS region/credentials/session token, AppConfig IDs, Secrets Manager prefixes, MinIO endpoint overrides, and S3 bucket/table settings
-- [ ] T082 [P] Run through `quickstart.md` steps in a clean environment; update any command that fails or has changed since plan; confirm `docker compose ps --format "table {{.Name}}\t{{.Status}}"` shows all healthy
+- [X] T076 [P] Create `infra/prometheus/prometheus.yml` scrape config: targets for `memory-api:8083/metrics`, `knowledge-ingestion:8080/metrics`, `connector-registry:8082/metrics`; scrape interval 15s; add to `prometheus` Compose service as mounted volume. (`agent-workers` and `context-hydrator` are eliminated; all application memory metrics now scraped from `memory-api`.)
+- [X] T077 [P] Create `tests/e2e/test_independent_suites_idempotent.py`: runs all independent test suites from Phases 3–11 that declare one in sequence with fresh `docker compose` stack between runs; verifies each phase test passes idempotently with no cross-test data leakage (confirms phase isolation assumption)
+- [X] T078 Complete `docker-compose.test.yml`: add `github-api-mock` (from `tests/mocks/github-api-mock/`) and `confluence-api-mock` (from `tests/mocks/confluence-api-mock/`) services; override `GITHUB_API_BASE_URL`, `CONFLUENCE_BASE_URL`, `SLACK_API_BASE_URL` env vars on `knowledge-ingestion` to point at mocks; set `ENVIRONMENT=test` on all application services; add `app` service that runs `pytest tests/` and exits
+- [X] T079 Create end-to-end integration test `tests/e2e/test_full_stack.py` that validates: (a) connector create → ingest → recall chain via `POST /api/v1/knowledge/search`; (b) PII detection halt + HITL approve; (c) scope change propagates within 60s via `POST /api/v1/knowledge/search`; (d) full four-layer hydration via `POST /api/v1/hydrate` with all layers populated; (e) MCP tool call via `POST /mcp` for `store_memory` and subsequent REST retrieval via `POST /api/v1/memories/search`; run via `docker compose -f docker-compose.test.yml up --exit-code-from app`
+- [X] T080 [P] Define and document both: (a) p95 baseline for `memory_recall_latency_seconds` under synthetic 1,000-entry memory store with concurrent 10-agent recall load; and (b) BYOD ingestion throughput baseline for SC-005 (`1,000`-file GitHub full sync under 10 minutes; `10`-file delta sync under 90 seconds on a GPU-resident host). Record both as performance benchmark fixtures for regression testing.
+- [X] T081 [P] Verify `.env.example` has entries for every env var referenced across all service code; fill in any gaps discovered during T078–T080, including AWS region/credentials/session token, AppConfig IDs, Secrets Manager prefixes, MinIO endpoint overrides, and S3 bucket/table settings
+- [X] T082 [P] Run through `quickstart.md` steps in a clean environment; update any command that fails or has changed since plan; confirm `docker compose ps --format "table {{.Name}}\t{{.Status}}"` shows all healthy
 
 **Checkpoint**: `docker compose -f docker-compose.test.yml up --exit-code-from app --abort-on-container-exit` exits 0. All 10 core services healthy, plus 2 test mock services when the test stack is used. Prometheus scrapes all configured memory-layer service metrics endpoints.
 
@@ -376,6 +376,152 @@ BYOD, PII, sharing, and full hydration are layered on after MVP is stable.
 | **Phase 12 (Polish)** | 7 |
 | **Parallelisable tasks [P]** | 35 |
 | **MVP scope (Phases 1–4)** | 38 tasks |
+
+---
+
+---
+
+## Phase 13: EA1 — Enterprise-Platform Memory Activities Migration (Priority: P1)
+
+**Goal**: Replace the pgvector-backed `activities_memory.py` in
+`examples/enterprise-agentic-platform/services/agent-workers/` with thin
+MEMRAG HTTP calls. All existing `AgentWorkflow` call sites continue to work
+unchanged in terms of function signature; only the backend routing changes.
+Full checklist context: `docs/enterprise-platform-implementation-checklist.md`.
+
+**Independent Test**:
+```bash
+cd examples/enterprise-agentic-platform/services/agent-workers
+pip install -r requirements.txt   # psycopg2/pgvector gone; httpx already present
+python -m pytest test/test_workflows.py -v
+```
+
+- [ ] T093 [EA1] Remove `psycopg2-binary>=2.9.9` and `pgvector>=0.2.4` from `examples/enterprise-agentic-platform/services/agent-workers/requirements.txt`
+- [ ] T094 [EA1] Add `MEMORY_API_URL: http://memory-api:8083` to the `agent-workers` environment in `examples/enterprise-agentic-platform/` Compose files; remove `EMBEDDING_MODEL` and `EMBEDDING_DIMENSIONS` env vars from the same service block
+- [ ] T095 [EA1] Replace entire `examples/enterprise-agentic-platform/services/agent-workers/activities_memory.py` with MEMRAG HTTP implementation: `_headers(workspace_id, agent_id)` helper returning `X-Workspace-ID`/`X-Agent-ID` dict; `recall_memories(query, agent_id, limit=3, workspace_id="default-tenant")` → `POST /api/v1/memories/search`; `store_memory(content, agent_id, metadata=None, workspace_id="default-tenant")` → `POST /api/v1/memories`; remove all Postgres, pgvector, and OpenAI embedding code
+- [ ] T096 [P] [EA1] Thread `workspace_id=tenant_id` into the `recall_memories` Temporal activity call in `examples/enterprise-agentic-platform/services/agent-workers/workflows.py` `_orchestrated_run()` (line ~148): change `args=[prompt, agent_id]` to `args=[prompt, agent_id, 3, tenant_id]`
+- [ ] T097 [P] [EA1] Thread `workspace_id=tenant_id` into all three `store_memory` Temporal activity call sites in `examples/enterprise-agentic-platform/services/agent-workers/workflows.py`: `_orchestrated_run()` (line ~518), `_react_loop()` (line ~889), `_manifest_assistant_run()` (line ~1036); change `args=[..., agent_id]` to `args=[..., agent_id, None, tenant_id]`
+- [ ] T098 [EA1] Append `log_session_turn(session_id, role, content, workspace_id, agent_id)` and `hydrate_context(prompt, session_id, workspace_id, agent_id)` activities to `examples/enterprise-agentic-platform/services/agent-workers/activities_memory.py`; both call MEMRAG endpoints (`POST /api/v1/session/{id}/turns` and `POST /api/v1/hydrate` respectively)
+- [ ] T099 [EA1] Register `log_session_turn` and `hydrate_context` in the `Worker` activities list in `examples/enterprise-agentic-platform/services/agent-workers/main.py` (alongside the existing `recall_memories`, `store_memory` entries)
+- [ ] T100 [EA1] Add `search_org_knowledge(query, workspace_id, agent_id, limit=5)` activity to `examples/enterprise-agentic-platform/services/agent-workers/activities_agent.py`; wire it into the KG tool router inside `_build_react_tools()` in `workflows.py`: replace any `_call_kg_service(...)` call with `search_org_knowledge` dispatching to `POST /api/v1/knowledge/search`
+- [ ] T101 [EA1] Update `examples/enterprise-agentic-platform/services/agent-workers/test/test_workflows.py`: replace OpenAI embedding mock patterns (lines ~66, ~92, ~149, ~280) with `respx` HTTP mocks for `http://memory-api:8083/api/v1/memories/search` (returns `{"memories":[]}`) and `http://memory-api:8083/api/v1/memories` (returns `{"id":"m-test"}`)
+- [ ] T102 [P] [EA1] Verify `examples/enterprise-agentic-platform/services/agent-workers/requirements.txt` contains `httpx>=0.27.0` and `respx>=0.21.1` (already present per existing file); add if absent
+
+**Checkpoint**: `python -m pytest test/test_workflows.py -v` passes in the agent-workers directory with MEMRAG endpoints mocked via respx. No Postgres or pgvector imports remain.
+
+---
+
+## Phase 14: EA2/EA3/EA4 — Enterprise-Platform UI: API Client Layer (Foundational)
+
+**Goal**: Add `connectorApi`, `memoryApi`, and `adminConnectorApi` clients plus all new TypeScript types to both apps' `lib/` directories. This is the only phase that blocks all subsequent UI phases; all page implementations can parallelise after this.
+
+**Independent Test**:
+```bash
+cd examples/enterprise-agentic-platform/apps/agent-studio && npx tsc --noEmit
+cd examples/enterprise-agentic-platform/apps/admin-console && npx tsc --noEmit
+```
+
+- [ ] T103 [EA2] Add `CONNECTOR_REGISTRY` and `MEMORY_API` base URL constants plus `connectorApi` (list, get, create, update, delete, syncNow, listGrants, addGrant, removeGrant) and `memoryApi` (searchKnowledge, searchMemories, searchShared, getSessionTurns, triggerIngest) exported objects to `examples/enterprise-agentic-platform/apps/agent-studio/src/lib/api.ts` per `docs/enterprise-platform-ui-plan.md` Section A1
+- [ ] T104 [P] [EA2] Add `ConnectorDef`, `Grant`, `KnowledgeChunk`, `Memory`, `SharedMemory`, `Turn` TypeScript interfaces to `examples/enterprise-agentic-platform/apps/agent-studio/src/lib/types.ts`
+- [ ] T105 [P] [EA2] Add `CONNECTOR_REGISTRY` constant and `adminConnectorApi` (listAll, delete, forceSync) to `examples/enterprise-agentic-platform/apps/admin-console/src/lib/api.ts`; reuse same `ConnectorDef`/`Grant` types (inline or shared import)
+
+**Checkpoint**: Both apps compile with `tsc --noEmit` after type additions. No runtime behaviour changes.
+
+---
+
+## Phase 15: EA2 — Enterprise-Platform UI: Connector Pages (Priority: P2)
+
+**Goal**: agent-studio gets a full `/connectors` CRUD section; admin-console gets a cross-workspace read view. Both call the live `connector-registry` service on port 8082.
+
+**Independent Test**:
+```bash
+cd examples/enterprise-agentic-platform/apps/agent-studio && npm run build
+cd examples/enterprise-agentic-platform/apps/admin-console && npm run build
+# Navigate to /connectors in each app and verify the page renders without error
+```
+
+- [ ] T106 [EA2] Create `examples/enterprise-agentic-platform/apps/agent-studio/src/app/(studio)/connectors/page.tsx`: connector list table showing Name, Type badge, Status chip, Last Synced; React Query on `connectorApi.list()`; per-row Edit Sheet, "Sync Now" button, Delete confirm Dialog; empty-state with "Add Source" button
+- [ ] T107 [EA2] Create `examples/enterprise-agentic-platform/apps/agent-studio/src/app/(studio)/connectors/[id]/page.tsx`: connector detail with config display (secrets shown as `••••••••`), chunk count, sync history list; "Sync Now" button calling `connectorApi.syncNow(id)`; back link to `/connectors`
+- [ ] T108 [EA2] Create `examples/enterprise-agentic-platform/apps/agent-studio/src/app/(studio)/connectors/[id]/grants/page.tsx`: grants list for the connector (`connectorApi.listGrants(id)`); "Add Grant" input for agent ID; remove grant button per row calling `connectorApi.removeGrant()`
+- [ ] T109 [EA2] Add connector creation Sheet to `connectors/page.tsx`: type selector (github/confluence/slack/rds_schema) switches displayed config fields; secret fields use `type="password"` with a reveal toggle; form submits via `connectorApi.create()`; after creation navigates to `connectors/[id]`
+- [ ] T110 [EA2] Create `examples/enterprise-agentic-platform/apps/admin-console/src/app/(admin)/connectors/page.tsx`: cross-workspace table (Name, Workspace, Type, Status, Chunk Count); data from `adminConnectorApi.listAll()`; "Force Sync" and "Delete" actions with confirm dialogs
+
+**Checkpoint**: `npm run build` exits 0 in both apps. `/connectors` page renders connector list (or empty state) in agent-studio; admin `/connectors` renders all-workspace table.
+
+---
+
+## Phase 16: EA3 — Enterprise-Platform UI: Memory Explorer & Agent Wizard Extension (Priority: P2)
+
+**Goal**: agent-studio gets a `/memory` three-tab explorer and an extended "Knowledge" wizard step with hydration preview. admin-console gets a `/memory-health` stats dashboard.
+
+**Independent Test**:
+```bash
+cd examples/enterprise-agentic-platform/apps/agent-studio && npm run build
+# Manually: navigate to /memory in agent-studio; submit a search query in each tab
+```
+
+- [ ] T111 [EA3] Create `examples/enterprise-agentic-platform/apps/agent-studio/src/app/(studio)/memory/page.tsx`: three-tab layout using existing UI tab components (Agent Memories / Shared Findings / Org Knowledge); each tab has a controlled search input + results list; calls `memoryApi.searchMemories()`, `memoryApi.searchShared()`, `memoryApi.searchKnowledge()` on submit; "Promote to Shared" Button on each Agent Memories row calls `POST /api/v1/shared`
+- [ ] T112 [P] [EA3] Extend the `"knowledge"` wizard step in `examples/enterprise-agentic-platform/apps/agent-studio/src/app/(studio)/agents/page.tsx`: add a second section below the existing KG multi-select titled "MEMRAG Org Knowledge (connectors)"; add a "Hydration Preview" inline panel with a query input and a "Test" button that calls `POST /api/v1/hydrate` and renders the returned `system_prompt` excerpt
+- [ ] T113 [P] [EA3] Create `examples/enterprise-agentic-platform/apps/admin-console/src/app/(admin)/memory-health/page.tsx`: read-only polling page (30s interval via React Query `refetchInterval`); calls `GET /api/v1/admin/stats` from MEMORY_API; renders L1/L2/L3/L4 key metrics (active sessions, vector counts, connector count); shows "unavailable" gracefully if endpoint not yet implemented
+
+**Checkpoint**: `npm run build` exits 0. `/memory` page renders all three tabs in agent-studio; agent wizard "Knowledge" step shows the MEMRAG section and hydration preview.
+
+---
+
+## Phase 17: EA4 — Enterprise-Platform UI: Navigation & Environment (Priority: P3)
+
+**Goal**: Both apps' sidebars reflect the new pages. All new env vars are documented and wired into Compose.
+
+**Independent Test**:
+```bash
+cd examples/enterprise-agentic-platform/apps/agent-studio && npm run build
+cd examples/enterprise-agentic-platform/apps/admin-console && npm run build
+# Verify sidebar renders new items without JavaScript errors
+```
+
+- [ ] T114 [EA4] Update `examples/enterprise-agentic-platform/apps/agent-studio/src/components/app-shell.tsx`: add two new sidebar nav entries after "Knowledge Graphs" — `{ href: "/connectors", label: "Connectors", icon: PlugZap }` and `{ href: "/memory", label: "Memory Explorer", icon: BrainCircuit }`; import `PlugZap` and `BrainCircuit` from `lucide-react`
+- [ ] T115 [P] [EA4] Find the admin-console nav item array (in `examples/enterprise-agentic-platform/apps/admin-console/src/`) and add "Connectors" (PlugZap) and "Memory Health" (Activity) items after "Knowledge Graphs"; import new Lucide icons
+- [ ] T116 [P] [EA4] Add `NEXT_PUBLIC_CONNECTOR_REGISTRY_URL=http://localhost:8082` and `NEXT_PUBLIC_MEMORY_API_URL=http://localhost:8083` to `.env.local` / `.env.example` in both `apps/agent-studio/` and `apps/admin-console/`; add the same two vars to the corresponding service blocks in any Compose file used to run the frontend apps
+
+**Checkpoint**: `npm run build` exits 0 in both apps. Sidebar nav renders "Connectors" and "Memory Explorer" (agent-studio) / "Connectors" and "Memory Health" (admin-console) with correct icons and routes.
+
+---
+
+## Dependencies & Execution Order (Phases 13–17)
+
+```
+Phase 13 (EA1 — Activities Migration)  ← independent; parallels core MEMRAG stack
+  └── no blockers; can begin immediately against existing enterprise-agentic-platform codebase
+
+Phase 14 (EA2/EA3/EA4 — API Client Layer)  ← independent; must complete before Phases 15–17
+  ├── Phase 15 (EA2 — Connector Pages)      ← T103–T105 done first
+  ├── Phase 16 (EA3 — Memory Explorer)      ← T103–T105 done first
+  └── Phase 17 (EA4 — Navigation/Env)       ← T103–T105 done; depends on pages existing
+```
+
+**Parallel opportunities**:
+- Phase 13 and Phase 14 run fully in parallel (backend vs. frontend)
+- Within Phase 14: T103, T104, T105 parallelise after T103 constants are defined
+- Within Phase 15: T106–T110 parallelise after T103–T105
+- Within Phase 16: T111, T112, T113 parallelise after T103–T105
+- Within Phase 17: T114, T115, T116 parallelise after their phase-specific prerequisites
+
+**MVP for enterprise integration**: Phase 13 alone (activities migration) gives agents immediate access to MEMRAG L2/L3/L4 with no UI work. UI phases (14–17) are additive.
+
+---
+
+## Updated Summary
+
+| | Count |
+|---|---|
+| **Original total (Phases 1–12)** | 91 |
+| **Phase 13 (EA1 — Activities Migration)** | 10 |
+| **Phase 14 (EA2/EA3/EA4 — API Client Layer)** | 3 |
+| **Phase 15 (EA2 — Connector Pages)** | 5 |
+| **Phase 16 (EA3 — Memory Explorer + Wizard)** | 3 |
+| **Phase 17 (EA4 — Navigation & Env)** | 3 |
+| **New total (Phases 1–17)** | **115** |
+| **New parallelisable tasks [P]** | 10 |
 
 ---
 

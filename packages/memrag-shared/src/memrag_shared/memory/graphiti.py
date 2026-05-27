@@ -32,7 +32,7 @@ async def store_with_graphiti(
 
     if os.getenv("GRAPHITI_ENABLED", "false").lower() == "true":
         server_url = os.getenv(
-            "GRAPHITI_SERVER_URL", "http://graphiti-server:8100"
+            "GRAPHITI_SERVER_URL", "http://graphiti-server:8000"
         ).rstrip("/")
         payload: dict[str, Any] = {
             "group_id": workspace_id,

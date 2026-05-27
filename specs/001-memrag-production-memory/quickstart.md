@@ -106,8 +106,9 @@ docker compose exec ollama ollama pull gemma4:12b
 ## 4. Run Database Migrations
 
 ```bash
-# PostgreSQL migrations (Alembic)
-docker compose exec connector-registry python -m alembic upgrade head
+# connector-registry uses goose (Go) for schema migrations
+# DATABASE_URL must be set in your .env before running
+docker compose run --rm connector-registry /connector-registry migrate
 ```
 
 ---
@@ -148,13 +149,15 @@ Or via the Temporal UI at `http://localhost:8088`.
 
 ## 7. Run Tests
 
-### Unit tests (inside container)
+### Unit / integration tests (host-side, requires uv venv)
 
 ```bash
-docker compose exec agent-workers pytest tests/unit/ -v
+# memory-api integration tests (fastest — no Docker required)
+source .venv/bin/activate
+cd services/memory-api && python -m pytest tests/integration/ -v --tb=short
 ```
 
-### Integration tests (full Compose run)
+### Full-stack integration tests (Docker Compose)
 
 ```bash
 docker compose -f docker-compose.test.yml up --exit-code-from app --abort-on-container-exit
@@ -193,7 +196,7 @@ GRAPHITI_ENABLED=true
 NEO4J_URI=bolt://neo4j:7687
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=memrag-neo4j
-GRAPHITI_SERVER_URL=http://graphiti-server:8100
+GRAPHITI_SERVER_URL=http://graphiti-server:8000
 GRAPHITI_MCP_SERVER_URL=http://graphiti-mcp:8200
 MEMORY_API_MCP_URL=http://memory-api:8083/mcp
 ```

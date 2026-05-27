@@ -1,25 +1,11 @@
-"""Smoke tests for memory-api FastAPI app using in-process TestClient.
+"""Smoke tests for memory-api FastAPI app using the shared in-process client.
 
-Validates Phase 6 checkpoint: /healthz works, header validation enforced,
-422 on missing required headers.
+Validates basic health, header validation, and compatibility response fields
+without leaking mocks into the rest of the integration suite.
 """
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
-
-# Add agent-workers/src so _load_module can find mem0_client and layer2
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "agent-workers" / "src"))
-
-# ──────────────────────────────────────────────────────────────
-# Patch the module-level callables BEFORE the app is created so
-# TestClient doesn't touch the real Qdrant/Ollama.
-# ──────────────────────────────────────────────────────────────
-import importlib
-
-main_module = importlib.import_module("main")  # loaded with PYTHONPATH=memory-api/src
-main_module.extract_and_store = AsyncMock(return_value=["fact-id-1"])
 
 from memrag_shared.layers import MemoryChunk, MemoryType, LAYER_AGENT  # noqa: E402
 
@@ -35,21 +21,32 @@ _fake_chunk = MemoryChunk(
     layer=LAYER_AGENT,
     metadata={},
 )
-main_module.recall_agent_memory = AsyncMock(return_value=[_fake_chunk])
-
-from fastapi.testclient import TestClient  # noqa: E402
-
-client = TestClient(main_module.app)
 
 
-def test_healthz():
+def _patch_main(monkeypatch) -> None:
+    import main as main_module
+
+    monkeypatch.setattr(
+        main_module,
+        "extract_and_store",
+        AsyncMock(return_value=["fact-id-1"]),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "recall_agent_memory",
+        AsyncMock(return_value=[_fake_chunk]),
+    )
+
+
+def test_healthz(client):
     resp = client.get("/healthz")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
     print("GET /healthz => 200 OK ✓")
 
 
-def test_store_memory_ok():
+def test_store_memory_ok(client, monkeypatch):
+    _patch_main(monkeypatch)
     resp = client.post(
         "/api/v1/memories",
         json={"agent_id": "agent-1", "content": "learned that Redis TTL is 24h"},
@@ -62,7 +59,7 @@ def test_store_memory_ok():
     print(f"POST /api/v1/memories => 200 OK, stored_count={body['stored_count']} ✓")
 
 
-def test_store_memory_agent_id_mismatch():
+def test_store_memory_agent_id_mismatch(client):
     resp = client.post(
         "/api/v1/memories",
         json={"agent_id": "agent-1", "content": "some fact"},
@@ -72,16 +69,17 @@ def test_store_memory_agent_id_mismatch():
     print("POST /api/v1/memories (agent_id mismatch) => 400 ✓")
 
 
-def test_store_memory_missing_headers():
+def test_store_memory_missing_headers(client):
     resp = client.post(
         "/api/v1/memories",
         json={"agent_id": "agent-1", "content": "some fact"},
     )
-    assert resp.status_code == 422, f"Expected 422 for missing headers, got {resp.status_code}"
-    print("POST /api/v1/memories (missing headers) => 422 ✓")
+    assert resp.status_code == 400, f"Expected 400 for missing headers, got {resp.status_code}"
+    print("POST /api/v1/memories (missing headers) => 400 ✓")
 
 
-def test_search_memories_ok():
+def test_search_memories_ok(client, monkeypatch):
+    _patch_main(monkeypatch)
     resp = client.post(
         "/api/v1/memories/search",
         json={"query": "Redis TTL", "agent_id": "agent-1", "limit": 5},
@@ -95,20 +93,10 @@ def test_search_memories_ok():
     print(f"POST /api/v1/memories/search => 200 OK, results={results} ✓")
 
 
-def test_search_memories_missing_headers():
+def test_search_memories_missing_headers(client):
     resp = client.post(
         "/api/v1/memories/search",
         json={"query": "something", "agent_id": "a"},
     )
-    assert resp.status_code == 422
-    print("POST /api/v1/memories/search (missing headers) => 422 ✓")
-
-
-if __name__ == "__main__":
-    test_healthz()
-    test_store_memory_ok()
-    test_store_memory_agent_id_mismatch()
-    test_store_memory_missing_headers()
-    test_search_memories_ok()
-    test_search_memories_missing_headers()
-    print("\nAll memory-api smoke tests PASSED ✓")
+    assert resp.status_code == 400
+    print("POST /api/v1/memories/search (missing headers) => 400 ✓")

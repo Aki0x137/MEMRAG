@@ -10,6 +10,7 @@ from memrag_shared.infra.ollama_client import get_client as get_ollama_client
 from memrag_shared.infra.qdrant_client import get_client as get_qdrant_client
 from memrag_shared.layers import KnowledgeChunk, KnowledgeType, LAYER_ORG
 from memrag_shared.memory.sparse import sparse_vector
+from memrag_shared.metrics import record_recall_latency
 from memrag_shared.recall.grants import Grant, load_grants
 
 
@@ -103,63 +104,68 @@ async def recall_org_knowledge(
     query_text: str,
     top_k: int = 8,
     grants_cache=None,
+    dense_embedding: list[float] | None = None,
+    sparse_payload: dict[str, list[int] | list[float]] | None = None,
 ) -> list[KnowledgeChunk]:
     """Recall organization knowledge with sharing-scope and agent-scope enforcement."""
 
-    dense_embedding = (await get_ollama_client().embed([query_text]))[0]
-    sparse_payload = sparse_vector(query_text)
-    grants = load_grants(workspace_id, grants_cache)
-    allowed_connector_ids = _normalise_grants(grants)
+    with record_recall_latency("layer4", workspace_id):
+        if dense_embedding is None:
+            dense_embedding = (await get_ollama_client().embed([query_text]))[0]
+        if sparse_payload is None:
+            sparse_payload = sparse_vector(query_text)
+        grants = load_grants(workspace_id, grants_cache)
+        allowed_connector_ids = _normalise_grants(grants)
 
-    points = cast(list[Any], _hybrid_query(dense_embedding, sparse_payload, top_k))
-    chunks: list[KnowledgeChunk] = []
-    seen_ids: set[str] = set()
+        points = cast(list[Any], _hybrid_query(dense_embedding, sparse_payload, top_k))
+        chunks: list[KnowledgeChunk] = []
+        seen_ids: set[str] = set()
 
-    for point in points:
-        if isinstance(point, tuple):
-            scored_point = point[0]
-            score = point[1] if len(point) > 1 else None
-        else:
-            scored_point = point
-            score = getattr(point, "score", None)
+        for point in points:
+            if isinstance(point, tuple):
+                scored_point = point[0]
+                score = point[1] if len(point) > 1 else None
+            else:
+                scored_point = point
+                score = getattr(point, "score", None)
 
-        payload = getattr(scored_point, "payload", {}) or {}
-        if not payload:
-            continue
-        point_id = str(getattr(scored_point, "id", ""))
-        if point_id in seen_ids:
-            continue
-        if not _sharing_scope_allows(payload, workspace_id, allowed_connector_ids):
-            continue
-        if not _agent_scope_allows(payload, agent_id, agent_tags):
-            continue
+            payload = getattr(scored_point, "payload", {}) or {}
+            if not payload:
+                continue
+            point_id = str(getattr(scored_point, "id", ""))
+            if point_id in seen_ids:
+                continue
+            if not _sharing_scope_allows(payload, workspace_id, allowed_connector_ids):
+                continue
+            if not _agent_scope_allows(payload, agent_id, agent_tags):
+                continue
 
-        seen_ids.add(point_id)
-        text = str(payload.get("text", ""))
-        chunks.append(
-            KnowledgeChunk(
-                id=point_id,
-                org_id=str(payload.get("workspace_id", workspace_id)),
-                connector_type=str(payload.get("source_type", "org_knowledge")),
-                text=text,
-                content=text,
-                knowledge_type=_parse_knowledge_type(payload.get("knowledge_type")),
-                title=str(payload.get("title", "")),
-                embedding=payload.get("dense_embedding"),
-                source_type=str(payload.get("source_type", "org_knowledge")),
-                score=float(score or getattr(scored_point, "score", 0.0) or 0.0),
-                url=payload.get("url"),
-                connector_id=str(payload.get("connector_id", "")),
-                source_url=payload.get("url"),
-                source_id=str(payload.get("resource_id", "")),
-                workspace_ids=list(payload.get("allowed_workspace_ids") or []),
-                topic_tags=list(payload.get("topic_tags") or []),
-                contains_pii=bool(payload.get("contains_pii", False)),
-                pii_entities=payload.get("pii_entities", {}) or {},
-                metadata={**payload, "layer": LAYER_ORG},
+            seen_ids.add(point_id)
+            text = str(payload.get("text", ""))
+            chunks.append(
+                KnowledgeChunk(
+                    id=point_id,
+                    org_id=str(payload.get("workspace_id", workspace_id)),
+                    connector_type=str(payload.get("source_type", "org_knowledge")),
+                    text=text,
+                    content=text,
+                    knowledge_type=_parse_knowledge_type(payload.get("knowledge_type")),
+                    title=str(payload.get("title", "")),
+                    embedding=payload.get("dense_embedding"),
+                    source_type=str(payload.get("source_type", "org_knowledge")),
+                    score=float(score or getattr(scored_point, "score", 0.0) or 0.0),
+                    url=payload.get("url"),
+                    connector_id=str(payload.get("connector_id", "")),
+                    source_url=payload.get("url"),
+                    source_id=str(payload.get("resource_id", "")),
+                    workspace_ids=list(payload.get("allowed_workspace_ids") or []),
+                    topic_tags=list(payload.get("topic_tags") or []),
+                    contains_pii=bool(payload.get("contains_pii", False)),
+                    pii_entities=payload.get("pii_entities", {}) or {},
+                    metadata={**payload, "layer": LAYER_ORG},
+                )
             )
-        )
-        if len(chunks) >= top_k:
-            break
+            if len(chunks) >= top_k:
+                break
 
-    return chunks
+        return chunks

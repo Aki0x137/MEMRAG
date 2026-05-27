@@ -2,12 +2,44 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import time
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
+
+
+_EMBED_CACHE: dict[tuple[str, tuple[str, ...]], tuple[float, list[list[float]]]] = {}
+_EMBED_IN_FLIGHT: dict[tuple[str, tuple[str, ...]], asyncio.Future[list[list[float]]]] = {}
+_EMBED_CACHE_LOCK = asyncio.Lock()
+
+
+def _embed_cache_ttl_seconds() -> float:
+    return float(os.getenv("OLLAMA_EMBED_CACHE_TTL_SECONDS", "300"))
+
+
+def _embed_cache_limit() -> int:
+    return int(os.getenv("OLLAMA_EMBED_CACHE_MAX_ITEMS", "512"))
+
+
+def _copy_embeddings(embeddings: list[list[float]]) -> list[list[float]]:
+    return [list(vector) for vector in embeddings]
+
+
+def _prune_embed_cache(now: float) -> None:
+    ttl = _embed_cache_ttl_seconds()
+    expired = [key for key, (ts, _value) in _EMBED_CACHE.items() if now - ts > ttl]
+    for key in expired:
+        _EMBED_CACHE.pop(key, None)
+
+    overflow = len(_EMBED_CACHE) - _embed_cache_limit()
+    if overflow > 0:
+        oldest_keys = sorted(_EMBED_CACHE, key=lambda key: _EMBED_CACHE[key][0])[:overflow]
+        for key in oldest_keys:
+            _EMBED_CACHE.pop(key, None)
 
 
 def _ollama_base_url() -> str:
@@ -37,13 +69,49 @@ class OllamaClient:
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         model = os.getenv("OLLAMA_EMBED_MODEL", "qwen3-embedding:4b")
+        cache_key = (model, tuple(texts))
+        now = time.monotonic()
+
+        async with _EMBED_CACHE_LOCK:
+            cached = _EMBED_CACHE.get(cache_key)
+            if cached and now - cached[0] <= _embed_cache_ttl_seconds():
+                return _copy_embeddings(cached[1])
+
+            in_flight = _EMBED_IN_FLIGHT.get(cache_key)
+            if in_flight is None:
+                loop = asyncio.get_running_loop()
+                in_flight = loop.create_future()
+                _EMBED_IN_FLIGHT[cache_key] = in_flight
+                owner = True
+            else:
+                owner = False
+
+        if not owner:
+            return _copy_embeddings(await in_flight)
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.base_url}/api/embed",
-                json={"model": model, "input": texts},
-            )
-            response.raise_for_status()
-            return response.json()["embeddings"]
+            try:
+                response = await client.post(
+                    f"{self.base_url}/api/embed",
+                    json={"model": model, "input": texts},
+                )
+                response.raise_for_status()
+                embeddings = response.json()["embeddings"]
+
+                async with _EMBED_CACHE_LOCK:
+                    _EMBED_CACHE[cache_key] = (time.monotonic(), _copy_embeddings(embeddings))
+                    _prune_embed_cache(time.monotonic())
+                    future = _EMBED_IN_FLIGHT.pop(cache_key, None)
+                    if future is not None and not future.done():
+                        future.set_result(_copy_embeddings(embeddings))
+
+                return embeddings
+            except Exception as exc:
+                async with _EMBED_CACHE_LOCK:
+                    future = _EMBED_IN_FLIGHT.pop(cache_key, None)
+                    if future is not None and not future.done():
+                        future.set_exception(exc)
+                raise
 
     async def complete(
         self,

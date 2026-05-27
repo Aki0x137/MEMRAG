@@ -136,8 +136,8 @@ services:
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
     depends_on:
-      - agent-workers
-      - context-hydrator
+      - memory-api
+      - connector-registry
       - knowledge-ingestion
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9090/-/healthy"]
@@ -182,92 +182,6 @@ services:
     networks:
       - memrag-network
 
-  agent-workers:
-    build:
-      context: .
-      dockerfile: services/agent-workers/Dockerfile
-    container_name: memrag-agent-workers
-    environment:
-      ENVIRONMENT: ${ENVIRONMENT:-development}
-      WORKSPACE_ID: ${WORKSPACE_ID:-default-workspace}
-      TEMPORAL_HOST: temporal:7233
-      QDRANT_HOST: qdrant:6333
-      REDIS_URL: redis://redis:6379
-      OLLAMA_HOST: http://ollama:11434
-      OLLAMA_DEVICE: ${OLLAMA_DEVICE:-cuda}
-      OLLAMA_CHAT_MODEL: ${OLLAMA_CHAT_MODEL:-gemma4:12b}
-      OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-qwen3-embedding:4b}
-      GRAPHITI_ENABLED: ${GRAPHITI_ENABLED:-false}
-      GRAPHITI_SERVER_URL: ${GRAPHITI_SERVER_URL:-http://graphiti-server:8100}
-      GRAPHITI_MCP_SERVER_URL: ${GRAPHITI_MCP_SERVER_URL:-http://graphiti-mcp:8101}
-      NEO4J_URI: ${NEO4J_URI:-bolt://neo4j:7687}
-      NEO4J_USER: ${NEO4J_USER:-neo4j}
-      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-memrag-neo4j}
-      AWS_REGION: ${AWS_REGION:-us-east-1}
-      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
-      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
-      AWS_APP_CONFIG_APPLICATION_ID: ${AWS_APP_CONFIG_APPLICATION_ID:-}
-      AWS_APP_CONFIG_ENVIRONMENT_ID: ${AWS_APP_CONFIG_ENVIRONMENT_ID:-}
-      AWS_APP_CONFIG_PROFILE_ID: ${AWS_APP_CONFIG_PROFILE_ID:-}
-    ports:
-      - "8080:8080"
-    depends_on:
-      temporal:
-        condition: service_healthy
-      qdrant:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      ollama:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "kill -0 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
-    networks:
-      - memrag-network
-
-  context-hydrator:
-    build:
-      context: ./services/context-hydrator
-      dockerfile: Dockerfile
-    container_name: memrag-context-hydrator
-    environment:
-      ENVIRONMENT: ${ENVIRONMENT:-development}
-      WORKSPACE_ID: ${WORKSPACE_ID:-default-workspace}
-      REDIS_URL: redis://redis:6379
-      QDRANT_HOST: qdrant:6333
-      OLLAMA_HOST: http://ollama:11434
-      AWS_REGION: ${AWS_REGION:-us-east-1}
-      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
-      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
-      AWS_APP_CONFIG_APPLICATION_ID: ${AWS_APP_CONFIG_APPLICATION_ID:-}
-      AWS_APP_CONFIG_ENVIRONMENT_ID: ${AWS_APP_CONFIG_ENVIRONMENT_ID:-}
-      AWS_APP_CONFIG_PROFILE_ID: ${AWS_APP_CONFIG_PROFILE_ID:-}
-    ports:
-      - "8081:8081"
-    depends_on:
-      redis:
-        condition: service_healthy
-      qdrant:
-        condition: service_healthy
-      ollama:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "kill -0 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
-    networks:
-      - memrag-network
-
   knowledge-ingestion:
     build:
       context: .
@@ -301,6 +215,7 @@ services:
       AWS_RDS_REGION: ${AWS_RDS_REGION:-us-east-1}
       AWS_RDS_IAM_ENABLED: ${AWS_RDS_IAM_ENABLED:-false}
       AWS_RDS_SSL_MODE: ${AWS_RDS_SSL_MODE:-require}
+      KNOWLEDGE_INGESTION_METRICS_PORT: ${KNOWLEDGE_INGESTION_METRICS_PORT:-8080}
     depends_on:
       temporal:
         condition: service_healthy
@@ -335,7 +250,7 @@ services:
       OLLAMA_CHAT_MODEL: ${OLLAMA_CHAT_MODEL:-gemma4:12b}
       OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-qwen3-embedding:4b}
       GRAPHITI_ENABLED: ${GRAPHITI_ENABLED:-false}
-      GRAPHITI_SERVER_URL: ${GRAPHITI_SERVER_URL:-http://graphiti-server:8100}
+      GRAPHITI_SERVER_URL: ${GRAPHITI_SERVER_URL:-http://graphiti-server:8000}
       GRAPHITI_MCP_SERVER_URL: ${GRAPHITI_MCP_SERVER_URL:-http://graphiti-mcp:8101}
       NEO4J_URI: ${NEO4J_URI:-bolt://neo4j:7687}
       NEO4J_USER: ${NEO4J_USER:-neo4j}
@@ -381,24 +296,25 @@ services:
       - memrag-network
 
   graphiti-server:
-    image: zep/graphiti-server:0.3
+    image: zepai/graphiti:0.22.0
     container_name: memrag-graphiti-server
     profiles: ["graphiti"]
     environment:
       OPENAI_BASE_URL: http://ollama:11434
+      OPENAI_API_KEY: ${GRAPHITI_OPENAI_API_KEY:-ollama-local}
       OPENAI_MODEL: ${OLLAMA_CHAT_MODEL:-gemma4:12b}
       NEO4J_URI: ${NEO4J_URI:-bolt://neo4j:7687}
       NEO4J_USER: ${NEO4J_USER:-neo4j}
       NEO4J_PASSWORD: ${NEO4J_PASSWORD:-memrag-neo4j}
     ports:
-      - "8100:8100"
+      - "8100:8000"
     depends_on:
       neo4j:
         condition: service_healthy
       ollama:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/8100' 2>/dev/null"]
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/8000' 2>/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -407,11 +323,11 @@ services:
       - memrag-network
 
   graphiti-mcp:
-    image: zep/graphiti-mcp:0.3
+    image: zepai/knowledge-graph-mcp:1.0.0-graphiti-0.22.0
     container_name: memrag-graphiti-mcp
     profiles: ["graphiti"]
     environment:
-      GRAPHITI_SERVER_URL: ${GRAPHITI_SERVER_URL:-http://graphiti-server:8100}
+      GRAPHITI_SERVER_URL: ${GRAPHITI_SERVER_URL:-http://graphiti-server:8000}
     ports:
       - "8101:8101"
     depends_on:

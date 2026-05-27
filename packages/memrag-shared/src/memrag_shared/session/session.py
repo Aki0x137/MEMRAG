@@ -13,6 +13,7 @@ from dataclasses import asdict, is_dataclass
 from typing import Any, cast
 
 from memrag_shared.infra.redis_client import get_client, session_key
+from memrag_shared.metrics import record_recall_latency
 
 SESSION_TTL_SECONDS = 24 * 60 * 60
 INLINE_PAYLOAD_LIMIT_BYTES = 256 * 1024
@@ -77,7 +78,8 @@ def fetch_recent_session(
     if redis is None:
         redis = get_client()
     key = session_key(workspace_id, session_id, "messages")
-    return _load_external_payload(key, redis)
+    with record_recall_latency("layer1", workspace_id):
+        return _load_external_payload(key, redis)
 
 
 def checkpoint_session(

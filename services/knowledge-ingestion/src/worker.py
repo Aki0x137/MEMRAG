@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
+from prometheus_client import start_http_server
 from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.service import RPCError
 
@@ -36,8 +38,15 @@ async def _ensure_decay_schedule() -> None:
         pass
 
 
+def _start_metrics_server() -> None:
+    """Expose Prometheus metrics for the worker process."""
+    port = int(os.getenv("KNOWLEDGE_INGESTION_METRICS_PORT", "8080"))
+    start_http_server(port)
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    _start_metrics_server()
     await _ensure_decay_schedule()
     worker = await get_worker(
         task_queue="ingestion-workers",

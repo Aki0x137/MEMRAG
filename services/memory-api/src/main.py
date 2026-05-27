@@ -21,9 +21,10 @@ import asyncio
 import logging
 import os
 import time
+from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from memrag_shared.assembler import HydrateRequest as AssemblerRequest
@@ -33,6 +34,7 @@ from memrag_shared.infra.qdrant_client import get_client as get_qdrant
 from memrag_shared.infra.redis_client import get_client as get_redis
 from memrag_shared.memory.graphiti import store_with_graphiti
 from memrag_shared.memory.mem0_client import extract_and_store
+from memrag_shared.memory.sparse import sparse_vector
 from memrag_shared.memory.shared import promote_to_shared
 from memrag_shared.recall.layer2 import recall_agent_memory
 from memrag_shared.recall.layer3 import recall_shared_memory
@@ -48,7 +50,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 try:
-    from prometheus_client import Counter, Histogram, make_asgi_app
+    from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 
     _hydration_ms = Histogram(
         "context_hydration_assembly_ms",
@@ -60,16 +62,9 @@ try:
         "Chunks dropped due to token budget overflow",
         labelnames=["workspace_id", "layer"],
     )
-    _recall_latency = Histogram(
-        "memory_recall_latency_seconds",
-        "Per-layer recall latency",
-        labelnames=["layer", "workspace_id"],
-    )
     _PROMETHEUS_ENABLED = True
-    _metrics_app = make_asgi_app()
-except ImportError:  # pragma: no cover
+except Exception:  # pragma: no cover  # ImportError or registry collision
     _PROMETHEUS_ENABLED = False
-    _metrics_app = None
 
 
 # ---------------------------------------------------------------------------
@@ -138,14 +133,6 @@ _MCP_TOOLS: list[dict] = [
 # App
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="MEMRAG Memory API", version="0.3.0")
-
-# Mount Prometheus /metrics endpoint when available
-if _PROMETHEUS_ENABLED and _metrics_app is not None:
-    app.mount("/metrics", _metrics_app)
-
-
-@app.on_event("startup")
 async def _ensure_qdrant_collections() -> None:  # pragma: no cover
     """Create memory collections when app starts.
 
@@ -178,6 +165,22 @@ async def _ensure_qdrant_collections() -> None:  # pragma: no cover
                 sparse_vectors_config={"sparse": qmodels.SparseVectorParams()},
             )
             log.info("Created Qdrant collection '%s' (dim=%d)", col, dim)
+
+
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    await _ensure_qdrant_collections()
+    yield
+
+
+app = FastAPI(title="MEMRAG Memory API", version="0.3.0", lifespan=_lifespan)
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics() -> Response:
+    if not _PROMETHEUS_ENABLED:
+        raise HTTPException(status_code=404, detail="Metrics unavailable")
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +220,7 @@ def _require_agent_id(x_agent_id: str | None) -> str:
 
 
 @app.get("/healthz")
+@app.get("/health")
 async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
@@ -270,14 +274,24 @@ async def post_session_turns(
 
 
 class StoreMemoryRequest(BaseModel):
-    agent_id: str = Field(min_length=1)
-    content: str = Field(min_length=1)
+    agent_id: str | None = None
+    content: str | None = None
+    text: str | None = None
     metadata: dict[str, Any] | None = None
+
+    def resolved_content(self) -> str:
+        content = self.content or self.text
+        if not content:
+            raise HTTPException(
+                status_code=422,
+                detail="Either content or text must be provided",
+            )
+        return content
 
 
 class SearchMemoriesRequest(BaseModel):
     query: str = Field(min_length=1)
-    agent_id: str = Field(min_length=1)
+    agent_id: str | None = None
     limit: int = Field(default=8, ge=1, le=50)
 
 
@@ -290,19 +304,34 @@ async def store_memory(
 ) -> dict[str, Any]:
     workspace_id = _resolve_workspace(x_workspace_id, x_tenant_id)
     agent_id = _require_agent_id(x_agent_id)
-    if request.agent_id != agent_id:
+    request_agent_id = request.agent_id or agent_id
+    if request.agent_id and request.agent_id != agent_id:
         raise HTTPException(
             status_code=400,
             detail="X-Agent-ID header must match the agent_id in the request body",
         )
+    content = request.resolved_content()
     stored_ids = await extract_and_store(
-        agent_id=request.agent_id,
+        agent_id=request_agent_id,
         workspace_id=workspace_id,
-        text=request.content,
+        text=content,
     )
     if not stored_ids:
-        return {"stored": False, "reason": "duplicate"}
-    return {"stored": True, "stored_ids": stored_ids}
+        return {
+            "status": "ok",
+            "agent_id": request_agent_id,
+            "stored": False,
+            "reason": "duplicate",
+            "stored_ids": [],
+            "stored_count": 0,
+        }
+    return {
+        "status": "ok",
+        "agent_id": request_agent_id,
+        "stored": True,
+        "stored_ids": stored_ids,
+        "stored_count": len(stored_ids),
+    }
 
 
 @app.post("/api/v1/memories/search", response_model=list[str])
@@ -314,14 +343,15 @@ async def search_memories(
 ) -> list[str]:
     workspace_id = _resolve_workspace(x_workspace_id, x_tenant_id)
     agent_id = _require_agent_id(x_agent_id)
-    if request.agent_id != agent_id:
+    request_agent_id = request.agent_id or agent_id
+    if request.agent_id and request.agent_id != agent_id:
         raise HTTPException(
             status_code=400,
             detail="X-Agent-ID header must match the agent_id in the request body",
         )
     chunks = await recall_agent_memory(
         workspace_id=workspace_id,
-        agent_id=request.agent_id,
+        agent_id=request_agent_id,
         query_text=request.query,
         top_k=request.limit,
     )
@@ -472,7 +502,7 @@ async def search_knowledge(
 
 class HydrateRequestBody(BaseModel):
     session_id: str = Field(min_length=1)
-    agent_id: str = Field(min_length=1)
+    agent_id: str | None = None
     query: str = Field(min_length=1)
     domain: str | None = None
     token_budget: int = Field(default=4096, ge=100, le=32768)
@@ -488,7 +518,8 @@ async def hydrate(
 ) -> dict[str, Any]:
     workspace_id = _resolve_workspace(x_workspace_id, x_tenant_id)
     agent_id = _require_agent_id(x_agent_id)
-    if body.agent_id != agent_id:
+    request_agent_id = body.agent_id or agent_id
+    if body.agent_id and body.agent_id != agent_id:
         raise HTTPException(
             status_code=400,
             detail="X-Agent-ID header must match agent_id in request body",
@@ -496,6 +527,8 @@ async def hydrate(
 
     failed_layers: list[str] = []
     graphiti_enabled = os.getenv("GRAPHITI_ENABLED", "false").lower() == "true"
+    query_embedding = (await get_ollama().embed([body.query]))[0]
+    query_sparse = sparse_vector(body.query)
 
     # ── L1: session turns from Redis ──────────────────────────────────────────
     async def _get_l1() -> list[dict]:
@@ -506,18 +539,15 @@ async def hydrate(
 
     # ── L2: agent memories ───────────────────────────────────────────────────
     async def _get_l2() -> list:
-        t0 = time.monotonic()
         try:
             result = await recall_agent_memory(
                 workspace_id=workspace_id,
-                agent_id=agent_id,
+                agent_id=request_agent_id,
                 query_text=body.query,
                 top_k=8,
+                dense_embedding=query_embedding,
+                sparse_payload=query_sparse,
             )
-            if _PROMETHEUS_ENABLED:
-                _recall_latency.labels(layer="layer2", workspace_id=workspace_id).observe(
-                    time.monotonic() - t0
-                )
             return result
         except Exception:  # noqa: BLE001
             failed_layers.append("layer2")
@@ -525,7 +555,6 @@ async def hydrate(
 
     # ── L3: shared memory (Qdrant or Graphiti) ────────────────────────────────
     async def _get_l3() -> list:
-        t0 = time.monotonic()
         try:
             if graphiti_enabled:
                 result = await recall_shared_graphiti(
@@ -538,10 +567,8 @@ async def hydrate(
                     workspace_id=workspace_id,
                     query_text=body.query,
                     top_k=8,
-                )
-            if _PROMETHEUS_ENABLED:
-                _recall_latency.labels(layer="layer3", workspace_id=workspace_id).observe(
-                    time.monotonic() - t0
+                    dense_embedding=query_embedding,
+                    sparse_payload=query_sparse,
                 )
             return result
         except Exception:  # noqa: BLE001
@@ -551,19 +578,16 @@ async def hydrate(
 
     # ── L4: org knowledge ────────────────────────────────────────────────────
     async def _get_l4() -> list:
-        t0 = time.monotonic()
         try:
             result = await recall_org_knowledge(
                 workspace_id=workspace_id,
-                agent_id=agent_id,
+                agent_id=request_agent_id,
                 agent_tags=body.agent_tags,
                 query_text=body.query,
                 top_k=8,
+                dense_embedding=query_embedding,
+                sparse_payload=query_sparse,
             )
-            if _PROMETHEUS_ENABLED:
-                _recall_latency.labels(layer="layer4", workspace_id=workspace_id).observe(
-                    time.monotonic() - t0
-                )
             return result
         except Exception:  # noqa: BLE001
             failed_layers.append("layer4")
@@ -584,7 +608,7 @@ async def hydrate(
     req = AssemblerRequest(
         workspace_id=workspace_id,
         session_id=body.session_id,
-        agent_id=agent_id,
+        agent_id=request_agent_id,
         query=body.query,
         domain=body.domain,
         token_budget=body.token_budget,
@@ -610,10 +634,20 @@ async def hydrate(
                     workspace_id=workspace_id, layer=layer_name
                 ).inc(dropped)
 
+    layer_stats = dict(response.layer_stats)
+    layer_stats.update(
+        {
+            "layer1": layer_stats.get("layer1_turns", 0),
+            "layer2": layer_stats.get("layer2_chunks", 0),
+            "layer3": layer_stats.get("layer3_chunks", 0),
+            "layer4": layer_stats.get("layer4_chunks", 0),
+        }
+    )
+
     return {
         "system_prompt": response.system_prompt,
         "token_count": response.token_count,
-        "layer_stats": response.layer_stats,
+        "layer_stats": layer_stats,
         "failed_layers": response.failed_layers,
         "citations": [
             {
